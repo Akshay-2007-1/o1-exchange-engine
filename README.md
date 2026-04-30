@@ -7,6 +7,12 @@ A high-performance limit order book and matching engine built in C++.
 - Matches on strict price/time (FIFO) priority
 - Emits trade events on every fill
 
+## Prerequisites
+Install these once on your machine:
+```bash
+sudo apt-get install -y build-essential cmake libboost-all-dev
+```
+
 ## Build
 ```bash
 mkdir build && cd build
