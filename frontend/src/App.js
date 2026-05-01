@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 
-const WS_URL = "ws://localhost:9001";
+// const WS_URL = "ws://localhost:9001";
+const WS_URL = "ws://20.205.25.160:9001";
 
 export default function App() {
   const [connected, setConnected]   = useState(false);
