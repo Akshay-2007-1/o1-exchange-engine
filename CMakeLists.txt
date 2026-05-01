@@ -22,12 +22,19 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(nlohmann_json)
 
 # ── Boost ─────────────────────────────────
-find_package(Boost 1.74 REQUIRED COMPONENTS system)
+if(APPLE)
+    set(CMAKE_PREFIX_PATH /opt/homebrew/opt/boost)
+    find_package(Boost 1.74 REQUIRED)
+    set(BOOST_LINK_LIB Boost::headers)
+else()
+    find_package(Boost 1.74 REQUIRED COMPONENTS system)
+    set(BOOST_LINK_LIB Boost::system)
+endif()
 
 # ── Main executable ────────────────────────
 add_executable(engine src/main.cpp src/server.cpp)
 target_include_directories(engine PRIVATE include)
-target_link_libraries(engine Boost::system pthread nlohmann_json::nlohmann_json)
+target_link_libraries(engine ${BOOST_LINK_LIB} pthread nlohmann_json::nlohmann_json)
 
 # ── Test executable ────────────────────────
 add_executable(tests tests/test_orderbook.cpp)
