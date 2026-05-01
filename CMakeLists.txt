@@ -4,22 +4,34 @@ project(ExchangeEngine)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
-# ── FetchContent must come first ──────────
-include(FetchContent)
+option(FETCH_GTEST "Fetch GoogleTest from GitHub" ON)
+option(FETCH_JSON "Fetch nlohmann/json from GitHub" ON)
 
-FetchContent_Declare(
-  googletest
-  URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.zip
-  DOWNLOAD_EXTRACT_TIMESTAMP true
-)
-FetchContent_MakeAvailable(googletest)
+# ── Google Test ───────────────────────────
+if(FETCH_GTEST)
+    include(FetchContent)
+    FetchContent_Declare(
+      googletest
+      URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.zip
+      DOWNLOAD_EXTRACT_TIMESTAMP true
+    )
+    FetchContent_MakeAvailable(googletest)
+else()
+    find_package(GTest REQUIRED)
+endif()
 
-FetchContent_Declare(
-  nlohmann_json
-  URL https://github.com/nlohmann/json/releases/download/v3.11.3/json.tar.xz
-  DOWNLOAD_EXTRACT_TIMESTAMP true
-)
-FetchContent_MakeAvailable(nlohmann_json)
+# ── nlohmann/json ─────────────────────────
+if(FETCH_JSON)
+    include(FetchContent)
+    FetchContent_Declare(
+      nlohmann_json
+      URL https://github.com/nlohmann/json/releases/download/v3.11.3/json.tar.xz
+      DOWNLOAD_EXTRACT_TIMESTAMP true
+    )
+    FetchContent_MakeAvailable(nlohmann_json)
+else()
+    find_package(nlohmann_json REQUIRED)
+endif()
 
 # ── Boost ─────────────────────────────────
 if(APPLE)
