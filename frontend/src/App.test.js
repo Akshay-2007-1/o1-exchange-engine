@@ -1,8 +1,27 @@
-import { render, screen } from '@testing-library/react';
-import App from './App';
+import { render, screen } from "@testing-library/react";
+import App from "./App";
 
-test('renders learn react link', () => {
+class MockWebSocket {
+  static OPEN = 1;
+
+  constructor() {
+    this.readyState = MockWebSocket.OPEN;
+  }
+
+  send() {}
+  close() {}
+}
+
+beforeEach(() => {
+  global.WebSocket = MockWebSocket;
+});
+
+test("renders the exchange dashboard", () => {
   render(<App />);
-  const linkElement = screen.getByText(/learn react/i);
-  expect(linkElement).toBeInTheDocument();
+
+  expect(screen.getByRole("heading", { name: /O\(1\) Exchange/i })).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: /Order Ticket/i })).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: /Buy Orders/i })).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: /Sell Orders/i })).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: /Trade Tape/i })).toBeInTheDocument();
 });
