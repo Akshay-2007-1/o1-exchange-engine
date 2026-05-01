@@ -1,1 +1,4 @@
 build/
+git config --global user.name “Shrey5132”
+.gitignore
+CMakeLists.txt
