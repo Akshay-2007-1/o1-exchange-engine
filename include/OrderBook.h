@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <iostream>
+#include <vector>
 
 // ─────────────────────────────────────────
 //  Side: which direction is this order?
@@ -40,6 +41,12 @@ class OrderBook {
 public:
     using PriceLevel = std::queue<Order>;
 
+    struct DepthLevel {
+        double price;
+        uint64_t quantity;
+        uint32_t orders;
+    };
+
     // bids: highest price first (best bid at begin())
     std::map<double, PriceLevel, std::greater<double>> bids;
 
@@ -48,6 +55,30 @@ public:
 
     // fires every time a match happens
     std::function<void(const Trade&)> on_trade;
+
+    std::vector<DepthLevel> bid_depth(std::size_t limit = 20) const {
+        std::vector<DepthLevel> depth;
+        depth.reserve(std::min(limit, bids.size()));
+
+        for (const auto& [price, level] : bids) {
+            if (depth.size() == limit) break;
+            depth.push_back({price, total_quantity(level), static_cast<uint32_t>(level.size())});
+        }
+
+        return depth;
+    }
+
+    std::vector<DepthLevel> ask_depth(std::size_t limit = 20) const {
+        std::vector<DepthLevel> depth;
+        depth.reserve(std::min(limit, asks.size()));
+
+        for (const auto& [price, level] : asks) {
+            if (depth.size() == limit) break;
+            depth.push_back({price, total_quantity(level), static_cast<uint32_t>(level.size())});
+        }
+
+        return depth;
+    }
 
     void add_order(Order order) {
         if (order.side == Side::BUY) {
@@ -62,6 +93,15 @@ public:
     }
 
 private:
+    static uint64_t total_quantity(PriceLevel level) {
+        uint64_t total = 0;
+        while (!level.empty()) {
+            total += level.front().quantity;
+            level.pop();
+        }
+        return total;
+    }
+
     void match_buy(Order& incoming) {
         while (incoming.quantity > 0 && !asks.empty()) {
             auto it = asks.begin();

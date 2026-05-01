@@ -10,6 +10,7 @@
 #include <set>
 #include <mutex>
 #include <thread>
+#include <vector>
 #include "OrderBook.h"
 
 namespace beast     = boost::beast;
@@ -19,6 +20,66 @@ using tcp           = net::ip::tcp;
 using json          = nlohmann::json;
 
 class Session;
+
+inline json trade_to_json(const Trade& t) {
+    json msg;
+    msg["type"]          = "trade";
+    msg["price"]         = t.price;
+    msg["quantity"]      = t.quantity;
+    msg["buy_order_id"]  = t.buy_order_id;
+    msg["sell_order_id"] = t.sell_order_id;
+    return msg;
+}
+
+inline json depth_to_json(const std::vector<OrderBook::DepthLevel>& depth) {
+    json levels = json::array();
+    for (const auto& level : depth) {
+        levels.push_back({
+            {"price", level.price},
+            {"quantity", level.quantity},
+            {"orders", level.orders}
+        });
+    }
+    return levels;
+}
+
+inline json book_to_json(const OrderBook& book) {
+    return {
+        {"type", "book"},
+        {"bids", depth_to_json(book.bid_depth())},
+        {"asks", depth_to_json(book.ask_depth())}
+    };
+}
+
+class TradeHistory {
+public:
+    void record(const Trade& trade) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        trades_.push_back(trade);
+        if (trades_.size() > max_trades_) {
+            trades_.erase(trades_.begin());
+        }
+    }
+
+    json to_json() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        json trades = json::array();
+
+        for (auto it = trades_.rbegin(); it != trades_.rend(); ++it) {
+            trades.push_back(trade_to_json(*it));
+        }
+
+        return {
+            {"type", "history"},
+            {"trades", trades}
+        };
+    }
+
+private:
+    static constexpr std::size_t max_trades_ = 100;
+    mutable std::mutex mutex_;
+    std::vector<Trade> trades_;
+};
 
 // ─────────────────────────────────────────
 //  Registry: tracks all live sessions
@@ -50,15 +111,21 @@ public:
     websocket::stream<tcp::socket> ws_;
     OrderBook& book_;
     SessionRegistry& registry_;
+    TradeHistory& history_;
+    std::mutex& book_mutex_;
     beast::flat_buffer buffer_;
+    std::mutex write_mutex_;
 
-    Session(tcp::socket socket, OrderBook& book, SessionRegistry& registry)
+    Session(tcp::socket socket, OrderBook& book, SessionRegistry& registry, TradeHistory& history, std::mutex& book_mutex)
         : ws_(std::move(socket))
         , book_(book)
-        , registry_(registry) {}
+        , registry_(registry)
+        , history_(history)
+        , book_mutex_(book_mutex) {}
 
     void send(const std::string& msg) {
         try {
+            std::lock_guard<std::mutex> lock(write_mutex_);
             if (ws_.is_open()) {
                 ws_.write(net::buffer(msg));
             }
@@ -77,17 +144,11 @@ public:
         }
 
         registry_.add(shared_from_this());
-
-        // wire trade broadcast to all sessions
-        book_.on_trade = [this](const Trade& t) {
-            json msg;
-            msg["type"]          = "trade";
-            msg["price"]         = t.price;
-            msg["quantity"]      = t.quantity;
-            msg["buy_order_id"]  = t.buy_order_id;
-            msg["sell_order_id"] = t.sell_order_id;
-            registry_.broadcast(msg.dump());
-        };
+        send(history_.to_json().dump());
+        {
+            std::lock_guard<std::mutex> lock(book_mutex_);
+            send(book_to_json(book_).dump());
+        }
 
         // read loop
         while (true) {
@@ -128,7 +189,11 @@ private:
                       << " " << order.quantity
                       << " @ $" << order.price << "\n";
 
-            book_.add_order(order);
+            {
+                std::lock_guard<std::mutex> lock(book_mutex_);
+                book_.add_order(order);
+                registry_.broadcast(book_to_json(book_).dump());
+            }
 
         } catch (const std::exception& e) {
             std::cerr << "Bad message: " << e.what() << "\n";
@@ -153,7 +218,12 @@ public:
     Server(net::io_context& ioc, unsigned short port, OrderBook& book)
         : acceptor_(ioc, tcp::endpoint(tcp::v4(), port))
         , book_(book)
-        , ioc_(ioc) {}
+        , ioc_(ioc) {
+        book_.on_trade = [this](const Trade& t) {
+            history_.record(t);
+            registry_.broadcast(trade_to_json(t).dump());
+        };
+    }
 
     void run() {
         std::cout << "WebSocket server listening on port "
@@ -163,7 +233,7 @@ public:
                 tcp::socket socket(ioc_);
                 acceptor_.accept(socket);
                 auto session = std::make_shared<Session>(
-                    std::move(socket), book_, registry_
+                    std::move(socket), book_, registry_, history_, book_mutex_
                 );
                 std::thread([session]() { session->run(); }).detach();
             } catch (const std::exception& e) {
@@ -177,4 +247,6 @@ private:
     OrderBook&       book_;
     net::io_context& ioc_;
     SessionRegistry  registry_;
+    TradeHistory     history_;
+    std::mutex       book_mutex_;
 };
