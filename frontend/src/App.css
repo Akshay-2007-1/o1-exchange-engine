@@ -299,6 +299,12 @@ input:focus {
   font-weight: 800;
 }
 
+.depth-row .order-id {
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+}
+
 .depth-row.buy .price {
   color: var(--buy);
 }
