@@ -43,11 +43,26 @@ inline json depth_to_json(const std::vector<OrderBook::DepthLevel>& depth) {
     return levels;
 }
 
+inline json orders_to_json(const std::vector<OrderBook::OrderSnapshot>& orders) {
+    json rows = json::array();
+    for (const auto& order : orders) {
+        rows.push_back({
+            {"id", order.id},
+            {"price", order.price},
+            {"quantity", order.quantity},
+            {"timestamp", order.timestamp}
+        });
+    }
+    return rows;
+}
+
 inline json book_to_json(const OrderBook& book) {
     return {
         {"type", "book"},
         {"bids", depth_to_json(book.bid_depth())},
-        {"asks", depth_to_json(book.ask_depth())}
+        {"asks", depth_to_json(book.ask_depth())},
+        {"buy_orders", orders_to_json(book.bid_orders())},
+        {"sell_orders", orders_to_json(book.ask_orders())}
     };
 }
 

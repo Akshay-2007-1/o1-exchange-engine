@@ -47,6 +47,13 @@ public:
         uint32_t orders;
     };
 
+    struct OrderSnapshot {
+        uint64_t id;
+        double price;
+        uint32_t quantity;
+        uint64_t timestamp;
+    };
+
     // bids: highest price first (best bid at begin())
     std::map<double, PriceLevel, std::greater<double>> bids;
 
@@ -80,6 +87,14 @@ public:
         return depth;
     }
 
+    std::vector<OrderSnapshot> bid_orders(std::size_t limit = 100) const {
+        return order_snapshots(bids, limit);
+    }
+
+    std::vector<OrderSnapshot> ask_orders(std::size_t limit = 100) const {
+        return order_snapshots(asks, limit);
+    }
+
     void add_order(Order order) {
         if (order.side == Side::BUY) {
             match_buy(order);
@@ -93,6 +108,26 @@ public:
     }
 
 private:
+    template <typename BookSide>
+    static std::vector<OrderSnapshot> order_snapshots(const BookSide& side, std::size_t limit) {
+        std::vector<OrderSnapshot> snapshots;
+        if (limit == 0) return snapshots;
+
+        snapshots.reserve(limit);
+
+        for (const auto& [price, level] : side) {
+            PriceLevel orders = level;
+            while (!orders.empty()) {
+                const Order& order = orders.front();
+                snapshots.push_back({order.id, order.price, order.quantity, order.timestamp});
+                if (snapshots.size() == limit) return snapshots;
+                orders.pop();
+            }
+        }
+
+        return snapshots;
+    }
+
     static uint64_t total_quantity(PriceLevel level) {
         uint64_t total = 0;
         while (!level.empty()) {

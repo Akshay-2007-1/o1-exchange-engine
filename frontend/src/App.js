@@ -23,6 +23,13 @@ function depthTotal(levels) {
   return levels.reduce((sum, level) => sum + Number(level.quantity || 0), 0);
 }
 
+function levelsAsOrders(levels) {
+  return levels.map((level, index) => ({
+    ...level,
+    id: level.id ?? `${level.price}-${index}`
+  }));
+}
+
 function Stat({ label, value, tone }) {
   return (
     <div className="stat">
@@ -32,34 +39,34 @@ function Stat({ label, value, tone }) {
   );
 }
 
-function DepthTable({ title, side, levels }) {
-  const maxQuantity = Math.max(...levels.map(level => Number(level.quantity || 0)), 1);
+function OrderTable({ title, side, orders }) {
+  const maxQuantity = Math.max(...orders.map(order => Number(order.quantity || 0)), 1);
 
   return (
     <section className="panel depth-panel">
       <div className="panel-heading">
         <h2>{title}</h2>
-        <span>{levels.length} levels</span>
+        <span>{orders.length} open</span>
       </div>
 
       <div className="depth-header">
+        <span>Order</span>
         <span>Price</span>
         <span>Qty</span>
-        <span>Orders</span>
       </div>
 
       <div className="depth-list">
-        {levels.length === 0 ? (
+        {orders.length === 0 ? (
           <div className="empty-state">No resting {side.toLowerCase()} orders</div>
         ) : (
-          levels.map(level => {
-            const width = `${(Number(level.quantity || 0) / maxQuantity) * 100}%`;
+          orders.map(order => {
+            const width = `${(Number(order.quantity || 0) / maxQuantity) * 100}%`;
             return (
-              <div className={`depth-row ${side.toLowerCase()}`} key={`${side}-${level.price}`}>
+              <div className={`depth-row ${side.toLowerCase()}`} key={`${side}-${order.id}-${order.timestamp || ""}`}>
                 <div className="depth-bar" style={{ width }} />
-                <span className="price">${formatPrice(level.price)}</span>
-                <span>{formatQuantity(level.quantity)}</span>
-                <span>{level.orders}</span>
+                <span className="order-id">#{order.id}</span>
+                <span className="price">${formatPrice(order.price)}</span>
+                <span>{formatQuantity(order.quantity)}</span>
               </div>
             );
           })
@@ -104,6 +111,8 @@ export default function App() {
   const [trades, setTrades] = useState([]);
   const [bids, setBids] = useState([]);
   const [asks, setAsks] = useState([]);
+  const [buyOrders, setBuyOrders] = useState([]);
+  const [sellOrders, setSellOrders] = useState([]);
   const [form, setForm] = useState({ side: "BUY", price: "", quantity: "" });
   const [lastError, setLastError] = useState("");
 
@@ -141,8 +150,13 @@ export default function App() {
         }
 
         if (msg.type === "book") {
-          setBids(msg.bids || []);
-          setAsks(msg.asks || []);
+          const bidDepth = msg.bids || [];
+          const askDepth = msg.asks || [];
+
+          setBids(bidDepth);
+          setAsks(askDepth);
+          setBuyOrders(msg.buy_orders || levelsAsOrders(bidDepth));
+          setSellOrders(msg.sell_orders || levelsAsOrders(askDepth));
         }
       } catch (error) {
         setLastError("Received an invalid exchange message.");
@@ -284,8 +298,8 @@ export default function App() {
         </section>
 
         <div className="book-grid">
-          <DepthTable title="Buy Orders" side="BUY" levels={bids} />
-          <DepthTable title="Sell Orders" side="SELL" levels={asks} />
+          <OrderTable title="Buy Orders" side="BUY" orders={buyOrders} />
+          <OrderTable title="Sell Orders" side="SELL" orders={sellOrders} />
         </div>
 
         <TradeFeed trades={trades} />

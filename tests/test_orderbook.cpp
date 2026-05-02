@@ -72,3 +72,29 @@ TEST(OrderBook, TimePriority) {
 
     EXPECT_EQ(first_matched_id, 1);  // Alice, not Bob
 }
+
+TEST(OrderBook, RestingOrderSnapshotsPreservePriorityAndQuantity) {
+    OrderBook book;
+
+    book.add_order({1, Side::BUY, 101.00, 100, 1000});
+    book.add_order({2, Side::BUY, 102.00, 150, 2000});
+    book.add_order({3, Side::BUY, 102.00, 75, 3000});
+    book.add_order({4, Side::SELL, 104.00, 50, 4000});
+
+    auto bids = book.bid_orders();
+    auto asks = book.ask_orders();
+
+    ASSERT_EQ(bids.size(), 3);
+    EXPECT_EQ(bids[0].id, 2);
+    EXPECT_EQ(bids[0].price, 102.00);
+    EXPECT_EQ(bids[0].quantity, 150);
+    EXPECT_EQ(bids[1].id, 3);
+    EXPECT_EQ(bids[1].price, 102.00);
+    EXPECT_EQ(bids[1].quantity, 75);
+    EXPECT_EQ(bids[2].id, 1);
+    EXPECT_EQ(bids[2].price, 101.00);
+    EXPECT_EQ(bids[2].quantity, 100);
+
+    ASSERT_EQ(asks.size(), 1);
+    EXPECT_EQ(asks[0].id, 4);
+}
