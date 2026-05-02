@@ -66,6 +66,17 @@ inline json book_to_json(const OrderBook& book) {
     };
 }
 
+inline json snapshot_to_json(const OrderBook& book, const json& history) {
+    return {
+        {"type", "snapshot"},
+        {"trades", history.value("trades", json::array())},
+        {"bids", depth_to_json(book.bid_depth())},
+        {"asks", depth_to_json(book.ask_depth())},
+        {"buy_orders", orders_to_json(book.bid_orders())},
+        {"sell_orders", orders_to_json(book.ask_orders())}
+    };
+}
+
 class TradeHistory {
 public:
     void record(const Trade& trade) {
@@ -159,11 +170,7 @@ public:
         }
 
         registry_.add(shared_from_this());
-        send(history_.to_json().dump());
-        {
-            std::lock_guard<std::mutex> lock(book_mutex_);
-            send(book_to_json(book_).dump());
-        }
+        send_snapshot();
 
         // read loop
         while (true) {
@@ -188,9 +195,20 @@ public:
     }
 
 private:
+    void send_snapshot() {
+        json history = history_.to_json();
+        std::lock_guard<std::mutex> lock(book_mutex_);
+        send(snapshot_to_json(book_, history).dump());
+    }
+
     void handle_message(const std::string& raw) {
         try {
             auto msg = json::parse(raw);
+
+            if (msg.value("type", "") == "snapshot") {
+                send_snapshot();
+                return;
+            }
 
             Order order;
             order.id        = msg["id"].get<uint64_t>();
