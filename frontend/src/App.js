@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
 
-// const WS_URL = process.env.REACT_APP_WS_URL || "ws://20.205.25.160:9001";
-const WS_URL = "ws://localhost:9001";
+const WS_URL = process.env.REACT_APP_WS_URL || "ws://20.205.25.160:9001";
+// const WS_URL = "ws://localhost:9001";
 
 const currency = new Intl.NumberFormat("en-US", {
   minimumFractionDigits: 2,
@@ -23,13 +23,6 @@ function depthTotal(levels) {
   return levels.reduce((sum, level) => sum + Number(level.quantity || 0), 0);
 }
 
-function levelsAsOrders(levels) {
-  return levels.map((level, index) => ({
-    ...level,
-    id: level.id ?? `${level.price}-${index}`
-  }));
-}
-
 function Stat({ label, value, tone }) {
   return (
     <div className="stat">
@@ -39,34 +32,37 @@ function Stat({ label, value, tone }) {
   );
 }
 
-function OrderTable({ title, side, orders }) {
-  const maxQuantity = Math.max(...orders.map(order => Number(order.quantity || 0)), 1);
+function OrderTable({ title, side, rows }) {
+  const maxQuantity = Math.max(...rows.map(row => Number(row.quantity || 0)), 1);
+  const hasOrderIds = rows.some(row => row.id !== undefined);
 
   return (
     <section className="panel depth-panel">
       <div className="panel-heading">
         <h2>{title}</h2>
-        <span>{orders.length} open</span>
+        <span>{rows.length} {hasOrderIds ? "open" : "levels"}</span>
       </div>
 
       <div className="depth-header">
-        <span>Order</span>
         <span>Price</span>
         <span>Qty</span>
+        <span>{hasOrderIds ? "Order" : "Orders"}</span>
       </div>
 
       <div className="depth-list">
-        {orders.length === 0 ? (
+        {rows.length === 0 ? (
           <div className="empty-state">No resting {side.toLowerCase()} orders</div>
         ) : (
-          orders.map(order => {
-            const width = `${(Number(order.quantity || 0) / maxQuantity) * 100}%`;
+          rows.map((row, index) => {
+            const width = `${(Number(row.quantity || 0) / maxQuantity) * 100}%`;
+            const rowKey = row.id ?? `${row.price}-${index}`;
+
             return (
-              <div className={`depth-row ${side.toLowerCase()}`} key={`${side}-${order.id}-${order.timestamp || ""}`}>
+              <div className={`depth-row ${side.toLowerCase()}`} key={`${side}-${rowKey}-${row.timestamp || ""}`}>
                 <div className="depth-bar" style={{ width }} />
-                <span className="order-id">#{order.id}</span>
-                <span className="price">${formatPrice(order.price)}</span>
-                <span>{formatQuantity(order.quantity)}</span>
+                <span className="price">${formatPrice(row.price)}</span>
+                <span>{formatQuantity(row.quantity)}</span>
+                <span className="order-id">{row.id !== undefined ? `#${row.id}` : row.orders}</span>
               </div>
             );
           })
@@ -120,11 +116,47 @@ export default function App() {
   const oid = useRef(1);
   const tradeSeq = useRef(1);
 
+  const rememberOrderIds = orders => {
+    orders.forEach(order => {
+      const id = Number(order.id);
+      if (Number.isFinite(id)) {
+        oid.current = Math.max(oid.current, id + 1);
+      }
+    });
+  };
+
+  const rememberTradeIds = trades => {
+    trades.forEach(trade => {
+      const buyId = Number(trade.buy_order_id);
+      const sellId = Number(trade.sell_order_id);
+      if (Number.isFinite(buyId)) oid.current = Math.max(oid.current, buyId + 1);
+      if (Number.isFinite(sellId)) oid.current = Math.max(oid.current, sellId + 1);
+    });
+  };
+
   const makeTradeRow = (trade, time = new Date().toLocaleTimeString()) => ({
     ...trade,
     rowId: `${trade.buy_order_id}-${trade.sell_order_id}-${tradeSeq.current++}`,
     time
   });
+
+  const applyBookSnapshot = msg => {
+    const bidDepth = msg.bids || [];
+    const askDepth = msg.asks || [];
+    const hasOrderSnapshots = Array.isArray(msg.buy_orders) && Array.isArray(msg.sell_orders);
+    const nextBuyOrders = hasOrderSnapshots ? msg.buy_orders : bidDepth;
+    const nextSellOrders = hasOrderSnapshots ? msg.sell_orders : askDepth;
+
+    if (hasOrderSnapshots) {
+      rememberOrderIds(nextBuyOrders);
+      rememberOrderIds(nextSellOrders);
+    }
+
+    setBids(bidDepth);
+    setAsks(askDepth);
+    setBuyOrders(nextBuyOrders);
+    setSellOrders(nextSellOrders);
+  };
 
   useEffect(() => {
     const socket = new WebSocket(WS_URL);
@@ -132,6 +164,7 @@ export default function App() {
     socket.onopen = () => {
       setConnected(true);
       setLastError("");
+      socket.send(JSON.stringify({ type: "snapshot" }));
     };
 
     socket.onmessage = event => {
@@ -139,24 +172,29 @@ export default function App() {
         const msg = JSON.parse(event.data);
 
         if (msg.type === "trade") {
+          rememberTradeIds([msg]);
           setTrades(prev => [makeTradeRow(msg), ...prev].slice(0, 20));
         }
 
         if (msg.type === "history") {
-          const history = (msg.trades || [])
+          const trades = msg.trades || [];
+          rememberTradeIds(trades);
+
+          const history = trades
             .slice(0, 20)
             .map(trade => makeTradeRow(trade, "Earlier"));
           setTrades(history);
         }
 
         if (msg.type === "book") {
-          const bidDepth = msg.bids || [];
-          const askDepth = msg.asks || [];
+          applyBookSnapshot(msg);
+        }
 
-          setBids(bidDepth);
-          setAsks(askDepth);
-          setBuyOrders(msg.buy_orders || levelsAsOrders(bidDepth));
-          setSellOrders(msg.sell_orders || levelsAsOrders(askDepth));
+        if (msg.type === "snapshot") {
+          const snapshotTrades = msg.trades || [];
+          rememberTradeIds(snapshotTrades);
+          setTrades(snapshotTrades.slice(0, 20).map(trade => makeTradeRow(trade, "Earlier")));
+          applyBookSnapshot(msg);
         }
       } catch (error) {
         setLastError("Received an invalid exchange message.");
@@ -190,7 +228,7 @@ export default function App() {
     }
 
     const order = {
-      id: oid.current++,
+      id: Date.now() * 1000 + oid.current++,
       side: form.side,
       price: parseFloat(form.price),
       quantity: parseInt(form.quantity, 10),
@@ -298,8 +336,8 @@ export default function App() {
         </section>
 
         <div className="book-grid">
-          <OrderTable title="Buy Orders" side="BUY" orders={buyOrders} />
-          <OrderTable title="Sell Orders" side="SELL" orders={sellOrders} />
+          <OrderTable title="Buy Orders" side="BUY" rows={buyOrders} />
+          <OrderTable title="Sell Orders" side="SELL" rows={sellOrders} />
         </div>
 
         <TradeFeed trades={trades} />
