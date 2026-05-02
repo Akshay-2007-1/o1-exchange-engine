@@ -11,6 +11,7 @@
 #include <mutex>
 #include <thread>
 #include <vector>
+#include <atomic>
 #include "OrderBook.h"
 
 namespace beast     = boost::beast;
@@ -139,15 +140,17 @@ public:
     SessionRegistry& registry_;
     TradeHistory& history_;
     std::mutex& book_mutex_;
+    std::atomic<uint64_t>& next_order_id_;
     beast::flat_buffer buffer_;
     std::mutex write_mutex_;
 
-    Session(tcp::socket socket, OrderBook& book, SessionRegistry& registry, TradeHistory& history, std::mutex& book_mutex)
+    Session(tcp::socket socket, OrderBook& book, SessionRegistry& registry, TradeHistory& history, std::mutex& book_mutex, std::atomic<uint64_t>& next_order_id)
         : ws_(std::move(socket))
         , book_(book)
         , registry_(registry)
         , history_(history)
-        , book_mutex_(book_mutex) {}
+        , book_mutex_(book_mutex)
+        , next_order_id_(next_order_id) {}
 
     void send(const std::string& msg) {
         try {
@@ -196,9 +199,13 @@ public:
 
 private:
     void send_snapshot() {
-        json history = history_.to_json();
-        std::lock_guard<std::mutex> lock(book_mutex_);
-        send(snapshot_to_json(book_, history).dump());
+        std::string payload;
+        {
+            std::lock_guard<std::mutex> lock(book_mutex_);
+            json history = history_.to_json();
+            payload = snapshot_to_json(book_, history).dump();
+        }
+        send(payload);
     }
 
     void handle_message(const std::string& raw) {
@@ -211,7 +218,7 @@ private:
             }
 
             Order order;
-            order.id        = msg["id"].get<uint64_t>();
+            order.id        = next_order_id_.fetch_add(1);
             order.side      = (msg["side"] == "BUY") ? Side::BUY : Side::SELL;
             order.price     = msg["price"].get<double>();
             order.quantity  = msg["quantity"].get<uint32_t>();
@@ -266,7 +273,7 @@ public:
                 tcp::socket socket(ioc_);
                 acceptor_.accept(socket);
                 auto session = std::make_shared<Session>(
-                    std::move(socket), book_, registry_, history_, book_mutex_
+                    std::move(socket), book_, registry_, history_, book_mutex_, next_order_id_
                 );
                 std::thread([session]() { session->run(); }).detach();
             } catch (const std::exception& e) {
@@ -282,4 +289,5 @@ private:
     SessionRegistry  registry_;
     TradeHistory     history_;
     std::mutex       book_mutex_;
+    std::atomic<uint64_t> next_order_id_{1};
 };

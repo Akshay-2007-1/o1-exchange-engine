@@ -23,6 +23,19 @@ function depthTotal(levels) {
   return levels.reduce((sum, level) => sum + Number(level.quantity || 0), 0);
 }
 
+function normalizedBook(msg) {
+  const bids = msg.bids || [];
+  const asks = msg.asks || [];
+  const hasOrderSnapshots = Array.isArray(msg.buy_orders) && Array.isArray(msg.sell_orders);
+
+  return {
+    bids,
+    asks,
+    buyOrders: hasOrderSnapshots ? msg.buy_orders : bids,
+    sellOrders: hasOrderSnapshots ? msg.sell_orders : asks
+  };
+}
+
 function Stat({ label, value, tone }) {
   return (
     <div className="stat">
@@ -111,28 +124,10 @@ export default function App() {
   const [sellOrders, setSellOrders] = useState([]);
   const [form, setForm] = useState({ side: "BUY", price: "", quantity: "" });
   const [lastError, setLastError] = useState("");
+  const [marketReady, setMarketReady] = useState(false);
 
   const ws = useRef(null);
-  const oid = useRef(1);
   const tradeSeq = useRef(1);
-
-  const rememberOrderIds = orders => {
-    orders.forEach(order => {
-      const id = Number(order.id);
-      if (Number.isFinite(id)) {
-        oid.current = Math.max(oid.current, id + 1);
-      }
-    });
-  };
-
-  const rememberTradeIds = trades => {
-    trades.forEach(trade => {
-      const buyId = Number(trade.buy_order_id);
-      const sellId = Number(trade.sell_order_id);
-      if (Number.isFinite(buyId)) oid.current = Math.max(oid.current, buyId + 1);
-      if (Number.isFinite(sellId)) oid.current = Math.max(oid.current, sellId + 1);
-    });
-  };
 
   const makeTradeRow = (trade, time = new Date().toLocaleTimeString()) => ({
     ...trade,
@@ -141,21 +136,17 @@ export default function App() {
   });
 
   const applyBookSnapshot = msg => {
-    const bidDepth = msg.bids || [];
-    const askDepth = msg.asks || [];
-    const hasOrderSnapshots = Array.isArray(msg.buy_orders) && Array.isArray(msg.sell_orders);
-    const nextBuyOrders = hasOrderSnapshots ? msg.buy_orders : bidDepth;
-    const nextSellOrders = hasOrderSnapshots ? msg.sell_orders : askDepth;
+    const book = normalizedBook(msg);
 
-    if (hasOrderSnapshots) {
-      rememberOrderIds(nextBuyOrders);
-      rememberOrderIds(nextSellOrders);
-    }
+    setBids(book.bids);
+    setAsks(book.asks);
+    setBuyOrders(book.buyOrders);
+    setSellOrders(book.sellOrders);
+    setMarketReady(true);
+  };
 
-    setBids(bidDepth);
-    setAsks(askDepth);
-    setBuyOrders(nextBuyOrders);
-    setSellOrders(nextSellOrders);
+  const applyTradeHistory = trades => {
+    setTrades(trades.slice(0, 20).map(trade => makeTradeRow(trade, "Earlier")));
   };
 
   useEffect(() => {
@@ -163,6 +154,7 @@ export default function App() {
 
     socket.onopen = () => {
       setConnected(true);
+      setMarketReady(false);
       setLastError("");
       socket.send(JSON.stringify({ type: "snapshot" }));
     };
@@ -172,18 +164,11 @@ export default function App() {
         const msg = JSON.parse(event.data);
 
         if (msg.type === "trade") {
-          rememberTradeIds([msg]);
           setTrades(prev => [makeTradeRow(msg), ...prev].slice(0, 20));
         }
 
         if (msg.type === "history") {
-          const trades = msg.trades || [];
-          rememberTradeIds(trades);
-
-          const history = trades
-            .slice(0, 20)
-            .map(trade => makeTradeRow(trade, "Earlier"));
-          setTrades(history);
+          applyTradeHistory(msg.trades || []);
         }
 
         if (msg.type === "book") {
@@ -191,9 +176,7 @@ export default function App() {
         }
 
         if (msg.type === "snapshot") {
-          const snapshotTrades = msg.trades || [];
-          rememberTradeIds(snapshotTrades);
-          setTrades(snapshotTrades.slice(0, 20).map(trade => makeTradeRow(trade, "Earlier")));
+          applyTradeHistory(msg.trades || []);
           applyBookSnapshot(msg);
         }
       } catch (error) {
@@ -207,6 +190,7 @@ export default function App() {
 
     socket.onclose = () => {
       setConnected(false);
+      setMarketReady(false);
     };
 
     ws.current = socket;
@@ -222,13 +206,17 @@ export default function App() {
       return;
     }
 
+    if (!marketReady) {
+      setLastError("Waiting for the market snapshot before sending an order.");
+      return;
+    }
+
     if (!form.price || !form.quantity) {
       setLastError("Enter both price and quantity.");
       return;
     }
 
     const order = {
-      id: Date.now() * 1000 + oid.current++,
       side: form.side,
       price: parseFloat(form.price),
       quantity: parseInt(form.quantity, 10),
