@@ -107,7 +107,42 @@ public:
         }
     }
 
+    bool cancel_order(Side side, double price, uint64_t order_id) {
+        return side == Side::BUY
+            ? cancel_from_side(bids, price, order_id)
+            : cancel_from_side(asks, price, order_id);
+    }
+
 private:
+    template <typename BookSide>
+    static bool cancel_from_side(BookSide& side, double price, uint64_t order_id) {
+        auto it = side.find(price);
+        if (it == side.end()) return false;
+
+        PriceLevel remaining;
+        bool cancelled = false;
+
+        while (!it->second.empty()) {
+            Order order = it->second.front();
+            it->second.pop();
+
+            if (order.id == order_id) {
+                cancelled = true;
+                continue;
+            }
+
+            remaining.push(order);
+        }
+
+        if (remaining.empty()) {
+            side.erase(it);
+        } else {
+            it->second = std::move(remaining);
+        }
+
+        return cancelled;
+    }
+
     template <typename BookSide>
     static std::vector<OrderSnapshot> order_snapshots(const BookSide& side, std::size_t limit) {
         std::vector<OrderSnapshot> snapshots;
