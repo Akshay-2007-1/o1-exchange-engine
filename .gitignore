@@ -2,3 +2,8 @@ build/
 git config --global user.name “Shrey5132”
 .gitignore
 CMakeLists.txt
+.aider.tags.cache.v4/cache.db-wal
+.aider.tags.cache.v4/cache.db
+.aider.input.history
+.aider.chat.history.md
+.aider.tags.cache.v4/cache.db-shm

@@ -98,3 +98,39 @@ TEST(OrderBook, RestingOrderSnapshotsPreservePriorityAndQuantity) {
     ASSERT_EQ(asks.size(), 1);
     EXPECT_EQ(asks[0].id, 4);
 }
+
+TEST(OrderBook, CancelOrderRemovesSpecificOrderAtPriceLevel) {
+    OrderBook book;
+
+    book.add_order({1, Side::SELL, 102.00, 100, 1000});
+    book.add_order({2, Side::SELL, 102.00, 200, 2000});
+    book.add_order({3, Side::SELL, 102.00, 300, 3000});
+
+    EXPECT_TRUE(book.cancel_order(Side::SELL, 102.00, 2));
+
+    auto asks = book.ask_orders();
+    ASSERT_EQ(asks.size(), 2);
+    EXPECT_EQ(asks[0].id, 1);
+    EXPECT_EQ(asks[0].quantity, 100);
+    EXPECT_EQ(asks[1].id, 3);
+    EXPECT_EQ(asks[1].quantity, 300);
+
+    auto depth = book.ask_depth();
+    ASSERT_EQ(depth.size(), 1);
+    EXPECT_EQ(depth[0].orders, 2);
+    EXPECT_EQ(depth[0].quantity, 400);
+}
+
+TEST(OrderBook, CancelOrderErasesEmptyPriceKeyOnly) {
+    OrderBook book;
+
+    book.add_order({1, Side::BUY, 101.00, 100, 1000});
+    book.add_order({2, Side::BUY, 102.00, 200, 2000});
+
+    EXPECT_TRUE(book.cancel_order(Side::BUY, 102.00, 2));
+    EXPECT_EQ(book.bids.size(), 1);
+    EXPECT_EQ(book.bids.begin()->first, 101.00);
+
+    EXPECT_FALSE(book.cancel_order(Side::BUY, 102.00, 2));
+    EXPECT_FALSE(book.cancel_order(Side::SELL, 101.00, 1));
+}

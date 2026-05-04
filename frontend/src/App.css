@@ -267,6 +267,11 @@ input:focus {
   align-items: center;
 }
 
+.depth-header.with-cancel,
+.depth-row.with-cancel {
+  grid-template-columns: minmax(84px, 1.1fr) minmax(74px, 1fr) 58px 30px;
+}
+
 .depth-header {
   padding: 10px 14px;
   color: var(--muted);
@@ -303,6 +308,29 @@ input:focus {
   overflow: hidden;
   color: var(--muted);
   text-overflow: ellipsis;
+}
+
+.cancel-order {
+  position: relative;
+  z-index: 1;
+  display: inline-grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 1px solid rgba(255, 98, 98, 0.46);
+  border-radius: 6px;
+  background: rgba(255, 98, 98, 0.1);
+  color: var(--sell);
+  cursor: pointer;
+  font-size: 22px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.cancel-order:hover,
+.cancel-order:focus-visible {
+  background: var(--sell);
+  color: #180707;
 }
 
 .depth-row.buy .price {

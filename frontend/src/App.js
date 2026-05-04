@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
 
-const WS_URL = process.env.REACT_APP_WS_URL || "ws://20.205.25.160:9001";
-// const WS_URL = "ws://localhost:9001";
+// const WS_URL = process.env.REACT_APP_WS_URL || "ws://20.205.25.160:9001";
+const WS_URL = "ws://localhost:9001";
 
 const currency = new Intl.NumberFormat("en-US", {
   minimumFractionDigits: 2,
@@ -45,9 +45,10 @@ function Stat({ label, value, tone }) {
   );
 }
 
-function OrderTable({ title, side, rows }) {
+function OrderTable({ title, side, rows, onCancel }) {
   const maxQuantity = Math.max(...rows.map(row => Number(row.quantity || 0)), 1);
   const hasOrderIds = rows.some(row => row.id !== undefined);
+  const canCancel = hasOrderIds && typeof onCancel === "function";
 
   return (
     <section className="panel depth-panel">
@@ -56,10 +57,11 @@ function OrderTable({ title, side, rows }) {
         <span>{rows.length} {hasOrderIds ? "open" : "levels"}</span>
       </div>
 
-      <div className="depth-header">
+      <div className={`depth-header ${canCancel ? "with-cancel" : ""}`}>
         <span>Price</span>
         <span>Qty</span>
         <span>{hasOrderIds ? "Order" : "Orders"}</span>
+        {canCancel && <span />}
       </div>
 
       <div className="depth-list">
@@ -71,11 +73,25 @@ function OrderTable({ title, side, rows }) {
             const rowKey = row.id ?? `${row.price}-${index}`;
 
             return (
-              <div className={`depth-row ${side.toLowerCase()}`} key={`${side}-${rowKey}-${row.timestamp || ""}`}>
+              <div
+                className={`depth-row ${side.toLowerCase()} ${canCancel ? "with-cancel" : ""}`}
+                key={`${side}-${rowKey}-${row.timestamp || ""}`}
+              >
                 <div className="depth-bar" style={{ width }} />
                 <span className="price">${formatPrice(row.price)}</span>
                 <span>{formatQuantity(row.quantity)}</span>
                 <span className="order-id">{row.id !== undefined ? `#${row.id}` : row.orders}</span>
+                {canCancel && (
+                  <button
+                    type="button"
+                    className="cancel-order"
+                    aria-label={`Cancel ${side.toLowerCase()} order ${row.id}`}
+                    title={`Cancel order #${row.id}`}
+                    onClick={() => onCancel(side, row)}
+                  >
+                    ×
+                  </button>
+                )}
               </div>
             );
           })
@@ -129,13 +145,13 @@ export default function App() {
   const ws = useRef(null);
   const tradeSeq = useRef(1);
 
-  const makeTradeRow = (trade, time = new Date().toLocaleTimeString()) => ({
+  const makeTradeRow = useCallback((trade, time = new Date().toLocaleTimeString()) => ({
     ...trade,
     rowId: `${trade.buy_order_id}-${trade.sell_order_id}-${tradeSeq.current++}`,
     time
-  });
+  }), []);
 
-  const applyBookSnapshot = msg => {
+  const applyBookSnapshot = useCallback(msg => {
     const book = normalizedBook(msg);
 
     setBids(book.bids);
@@ -143,11 +159,11 @@ export default function App() {
     setBuyOrders(book.buyOrders);
     setSellOrders(book.sellOrders);
     setMarketReady(true);
-  };
+  }, []);
 
-  const applyTradeHistory = trades => {
+  const applyTradeHistory = useCallback(trades => {
     setTrades(trades.slice(0, 20).map(trade => makeTradeRow(trade, "Earlier")));
-  };
+  }, [makeTradeRow]);
 
   useEffect(() => {
     const socket = new WebSocket(WS_URL);
@@ -196,7 +212,7 @@ export default function App() {
     ws.current = socket;
 
     return () => socket.close();
-  }, []);
+  }, [applyBookSnapshot, applyTradeHistory, makeTradeRow]);
 
   const submitOrder = event => {
     event.preventDefault();
@@ -225,6 +241,31 @@ export default function App() {
 
     ws.current.send(JSON.stringify(order));
     setForm(current => ({ ...current, price: "", quantity: "" }));
+    setLastError("");
+  };
+
+  const cancelOrder = (side, row) => {
+    if (!ws.current || ws.current.readyState !== WebSocket.OPEN) {
+      setLastError("Connect to the exchange before cancelling an order.");
+      return;
+    }
+
+    if (!marketReady) {
+      setLastError("Waiting for the market snapshot before cancelling an order.");
+      return;
+    }
+
+    if (row.id === undefined) {
+      setLastError("Cannot cancel a price level without a specific order id.");
+      return;
+    }
+
+    ws.current.send(JSON.stringify({
+      type: "cancel",
+      side,
+      order_id: row.id,
+      price: Number(row.price)
+    }));
     setLastError("");
   };
 
@@ -324,8 +365,8 @@ export default function App() {
         </section>
 
         <div className="book-grid">
-          <OrderTable title="Buy Orders" side="BUY" rows={buyOrders} />
-          <OrderTable title="Sell Orders" side="SELL" rows={sellOrders} />
+          <OrderTable title="Buy Orders" side="BUY" rows={buyOrders} onCancel={cancelOrder} />
+          <OrderTable title="Sell Orders" side="SELL" rows={sellOrders} onCancel={cancelOrder} />
         </div>
 
         <TradeFeed trades={trades} />

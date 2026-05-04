@@ -217,6 +217,25 @@ private:
                 return;
             }
 
+            if (msg.value("type", "") == "cancel") {
+                const Side side = (msg["side"] == "BUY") ? Side::BUY : Side::SELL;
+                const double price = msg["price"].get<double>();
+                const uint64_t order_id = msg["order_id"].get<uint64_t>();
+
+                std::cout << "Cancel order #" << order_id
+                          << " " << (side == Side::BUY ? "BUY" : "SELL")
+                          << " @ $" << price << "\n";
+
+                {
+                    std::lock_guard<std::mutex> lock(book_mutex_);
+                    if (book_.cancel_order(side, price, order_id)) {
+                        registry_.broadcast(book_to_json(book_).dump());
+                    }
+                }
+
+                return;
+            }
+
             Order order;
             order.id        = next_order_id_.fetch_add(1);
             order.side      = (msg["side"] == "BUY") ? Side::BUY : Side::SELL;
