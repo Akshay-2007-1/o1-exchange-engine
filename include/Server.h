@@ -212,6 +212,9 @@ private:
         try {
             auto msg = json::parse(raw);
 
+            // Defensive check: ignore messages that aren't standard JSON objects
+            if (!msg.is_object()) return;
+
             if (msg.value("type", "") == "snapshot") {
                 send_snapshot();
                 return;
@@ -232,26 +235,28 @@ private:
                         registry_.broadcast(book_to_json(book_).dump());
                     }
                 }
-
                 return;
             }
 
-            Order order;
-            order.id        = next_order_id_.fetch_add(1);
-            order.side      = (msg["side"] == "BUY") ? Side::BUY : Side::SELL;
-            order.price     = msg["price"].get<double>();
-            order.quantity  = msg["quantity"].get<uint32_t>();
-            order.timestamp = msg["timestamp"].get<uint64_t>();
+            // Explicit check for orders
+            if (msg.value("type", "") == "order") {
+                Order order;
+                order.id        = next_order_id_.fetch_add(1);
+                order.side      = (msg["side"] == "BUY") ? Side::BUY : Side::SELL;
+                order.price     = msg["price"].get<double>();
+                order.quantity  = msg["quantity"].get<uint32_t>();
+                order.timestamp = msg["timestamp"].get<uint64_t>();
 
-            std::cout << "Order #" << order.id
-                      << " " << (order.side == Side::BUY ? "BUY" : "SELL")
-                      << " " << order.quantity
-                      << " @ $" << order.price << "\n";
+                std::cout << "Order #" << order.id
+                          << " " << (order.side == Side::BUY ? "BUY" : "SELL")
+                          << " " << order.quantity
+                          << " @ $" << order.price << "\n";
 
-            {
-                std::lock_guard<std::mutex> lock(book_mutex_);
-                book_.add_order(order);
-                registry_.broadcast(book_to_json(book_).dump());
+                {
+                    std::lock_guard<std::mutex> lock(book_mutex_);
+                    book_.add_order(order);
+                    registry_.broadcast(book_to_json(book_).dump());
+                }
             }
 
         } catch (const std::exception& e) {
