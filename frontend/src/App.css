@@ -313,18 +313,22 @@ input:focus {
 .cancel-order {
   position: relative;
   z-index: 1;
-  display: inline-grid;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 0;
   width: 28px;
   height: 28px;
-  place-items: center;
   border: 1px solid rgba(255, 98, 98, 0.46);
   border-radius: 6px;
   background: rgba(255, 98, 98, 0.1);
   color: var(--sell);
   cursor: pointer;
-  font-size: 22px;
-  font-weight: 800;
-  line-height: 1;
+}
+
+.cancel-order svg {
+  width: 14px;
+  height: 14px;
 }
 
 .cancel-order:hover,
