@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <iostream>
+#include <string>
 #include <vector>
 
 // ─────────────────────────────────────────
@@ -18,6 +19,8 @@ enum class Side { BUY, SELL };
 // ─────────────────────────────────────────
 struct Order {
     uint64_t id;
+    int      company_id;
+    std::string company_name;
     Side     side;
     double   price;
     uint32_t quantity;
@@ -30,6 +33,8 @@ struct Order {
 struct Trade {
     uint64_t buy_order_id;
     uint64_t sell_order_id;
+    int      company_id;
+    std::string company_name;
     double   price;
     uint32_t quantity;
 };
@@ -198,6 +203,8 @@ private:
             uint32_t fill_qty = std::min(incoming.quantity, resting.quantity);
 
             Trade trade;
+            trade.company_id    = incoming.company_id;
+            trade.company_name  = incoming.company_name;
             trade.price         = exec_price;
             trade.quantity      = fill_qty;
             trade.buy_order_id  = (incoming.side == Side::BUY)  ? incoming.id : resting.id;

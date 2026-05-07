@@ -12,7 +12,7 @@
 #include <thread>
 #include <vector>
 #include <atomic>
-#include "OrderBook.h"
+#include "Market.h"
 
 namespace beast     = boost::beast;
 namespace websocket = beast::websocket;
@@ -25,6 +25,8 @@ class Session;
 inline json trade_to_json(const Trade& t) {
     json msg;
     msg["type"]          = "trade";
+    msg["company_id"]    = t.company_id;
+    msg["company_name"]  = t.company_name;
     msg["price"]         = t.price;
     msg["quantity"]      = t.quantity;
     msg["buy_order_id"]  = t.buy_order_id;
@@ -57,24 +59,46 @@ inline json orders_to_json(const std::vector<OrderBook::OrderSnapshot>& orders) 
     return rows;
 }
 
-inline json book_to_json(const OrderBook& book) {
+inline json companies_to_json(const std::vector<Company>& companies) {
+    json rows = json::array();
+    for (const auto& company : companies) {
+        rows.push_back({
+            {"id", company.id},
+            {"symbol", company.symbol},
+            {"name", company.name},
+            {"total_shares", company.total_shares}
+        });
+    }
+    return rows;
+}
+
+inline json book_to_json(const InstrumentState& instrument) {
     return {
         {"type", "book"},
-        {"bids", depth_to_json(book.bid_depth())},
-        {"asks", depth_to_json(book.ask_depth())},
-        {"buy_orders", orders_to_json(book.bid_orders())},
-        {"sell_orders", orders_to_json(book.ask_orders())}
+        {"company_id", instrument.company.id},
+        {"company_name", instrument.company.name},
+        {"company_symbol", instrument.company.symbol},
+        {"total_shares", instrument.company.total_shares},
+        {"bids", depth_to_json(instrument.book.bid_depth())},
+        {"asks", depth_to_json(instrument.book.ask_depth())},
+        {"buy_orders", orders_to_json(instrument.book.bid_orders())},
+        {"sell_orders", orders_to_json(instrument.book.ask_orders())}
     };
 }
 
-inline json snapshot_to_json(const OrderBook& book, const json& history) {
+inline json snapshot_to_json(const InstrumentState& instrument, const json& history, const std::vector<Company>& companies) {
     return {
         {"type", "snapshot"},
+        {"company_id", instrument.company.id},
+        {"company_name", instrument.company.name},
+        {"company_symbol", instrument.company.symbol},
+        {"total_shares", instrument.company.total_shares},
+        {"companies", companies_to_json(companies)},
         {"trades", history.value("trades", json::array())},
-        {"bids", depth_to_json(book.bid_depth())},
-        {"asks", depth_to_json(book.ask_depth())},
-        {"buy_orders", orders_to_json(book.bid_orders())},
-        {"sell_orders", orders_to_json(book.ask_orders())}
+        {"bids", depth_to_json(instrument.book.bid_depth())},
+        {"asks", depth_to_json(instrument.book.ask_depth())},
+        {"buy_orders", orders_to_json(instrument.book.bid_orders())},
+        {"sell_orders", orders_to_json(instrument.book.ask_orders())}
     };
 }
 
@@ -136,21 +160,21 @@ private:
 class Session : public std::enable_shared_from_this<Session> {
 public:
     websocket::stream<tcp::socket> ws_;
-    OrderBook& book_;
+    MarketState& market_;
     SessionRegistry& registry_;
     TradeHistory& history_;
-    std::mutex& book_mutex_;
     std::atomic<uint64_t>& next_order_id_;
+    int default_company_id_;
     beast::flat_buffer buffer_;
     std::mutex write_mutex_;
 
-    Session(tcp::socket socket, OrderBook& book, SessionRegistry& registry, TradeHistory& history, std::mutex& book_mutex, std::atomic<uint64_t>& next_order_id)
+    Session(tcp::socket socket, MarketState& market, SessionRegistry& registry, TradeHistory& history, std::atomic<uint64_t>& next_order_id)
         : ws_(std::move(socket))
-        , book_(book)
+        , market_(market)
         , registry_(registry)
         , history_(history)
-        , book_mutex_(book_mutex)
-        , next_order_id_(next_order_id) {}
+        , next_order_id_(next_order_id)
+        , default_company_id_(market.default_company_id()) {}
 
     void send(const std::string& msg) {
         try {
@@ -173,7 +197,7 @@ public:
         }
 
         registry_.add(shared_from_this());
-        send_snapshot();
+        send_snapshot(default_company_id_);
 
         // read loop
         while (true) {
@@ -198,13 +222,15 @@ public:
     }
 
 private:
-    void send_snapshot() {
+    void send_snapshot(int company_id) {
         std::string payload;
-        {
-            std::lock_guard<std::mutex> lock(book_mutex_);
-            json history = history_.to_json();
-            payload = snapshot_to_json(book_, history).dump();
-        }
+        const InstrumentState* instrument = market_.find_instrument(company_id);
+        if (instrument == nullptr) instrument = market_.find_instrument(default_company_id_);
+        if (instrument == nullptr) return;
+
+        std::lock_guard<std::mutex> lock(instrument->mutex);
+        json history = history_.to_json();
+        payload = snapshot_to_json(*instrument, history, market_.companies()).dump();
         send(payload);
     }
 
@@ -216,47 +242,55 @@ private:
             if (!msg.is_object()) return;
 
             if (msg.value("type", "") == "snapshot") {
-                send_snapshot();
+                send_snapshot(msg.value("company_id", default_company_id_));
                 return;
             }
 
             if (msg.value("type", "") == "cancel") {
+                const int company_id = msg.value("company_id", default_company_id_);
+                InstrumentState* instrument = market_.find_instrument(company_id);
+                if (instrument == nullptr) return;
+
                 const Side side = (msg["side"] == "BUY") ? Side::BUY : Side::SELL;
                 const double price = msg["price"].get<double>();
                 const uint64_t order_id = msg["order_id"].get<uint64_t>();
 
                 std::cout << "Cancel order #" << order_id
+                          << " [" << instrument->company.symbol << "]"
                           << " " << (side == Side::BUY ? "BUY" : "SELL")
                           << " @ $" << price << "\n";
 
-                {
-                    std::lock_guard<std::mutex> lock(book_mutex_);
-                    if (book_.cancel_order(side, price, order_id)) {
-                        registry_.broadcast(book_to_json(book_).dump());
-                    }
+                std::lock_guard<std::mutex> lock(instrument->mutex);
+                if (instrument->book.cancel_order(side, price, order_id)) {
+                    registry_.broadcast(book_to_json(*instrument).dump());
                 }
                 return;
             }
 
             // Explicit check for orders
             if (msg.value("type", "") == "order") {
+                const int company_id = msg.value("company_id", default_company_id_);
+                InstrumentState* instrument = market_.find_instrument(company_id);
+                if (instrument == nullptr) return;
+
                 Order order;
                 order.id        = next_order_id_.fetch_add(1);
+                order.company_id = instrument->company.id;
+                order.company_name = instrument->company.name;
                 order.side      = (msg["side"] == "BUY") ? Side::BUY : Side::SELL;
                 order.price     = msg["price"].get<double>();
                 order.quantity  = msg["quantity"].get<uint32_t>();
                 order.timestamp = msg["timestamp"].get<uint64_t>();
 
                 std::cout << "Order #" << order.id
+                          << " [" << instrument->company.symbol << "]"
                           << " " << (order.side == Side::BUY ? "BUY" : "SELL")
                           << " " << order.quantity
                           << " @ $" << order.price << "\n";
 
-                {
-                    std::lock_guard<std::mutex> lock(book_mutex_);
-                    book_.add_order(order);
-                    registry_.broadcast(book_to_json(book_).dump());
-                }
+                std::lock_guard<std::mutex> lock(instrument->mutex);
+                instrument->book.add_order(order);
+                registry_.broadcast(book_to_json(*instrument).dump());
             }
 
         } catch (const std::exception& e) {
@@ -279,14 +313,19 @@ inline void SessionRegistry::broadcast(const std::string& msg) {
 // ─────────────────────────────────────────
 class Server {
 public:
-    Server(net::io_context& ioc, unsigned short port, OrderBook& book)
+    Server(net::io_context& ioc, unsigned short port, MarketState& market)
         : acceptor_(ioc, tcp::endpoint(tcp::v4(), port))
-        , book_(book)
+        , market_(market)
         , ioc_(ioc) {
-        book_.on_trade = [this](const Trade& t) {
-            history_.record(t);
-            registry_.broadcast(trade_to_json(t).dump());
-        };
+        for (const auto& company : market_.companies()) {
+            InstrumentState* instrument = market_.find_instrument(company.id);
+            if (instrument == nullptr) continue;
+
+            instrument->book.on_trade = [this](const Trade& t) {
+                history_.record(t);
+                registry_.broadcast(trade_to_json(t).dump());
+            };
+        }
     }
 
     void run() {
@@ -297,7 +336,7 @@ public:
                 tcp::socket socket(ioc_);
                 acceptor_.accept(socket);
                 auto session = std::make_shared<Session>(
-                    std::move(socket), book_, registry_, history_, book_mutex_, next_order_id_
+                    std::move(socket), market_, registry_, history_, next_order_id_
                 );
                 std::thread([session]() { session->run(); }).detach();
             } catch (const std::exception& e) {
@@ -308,10 +347,9 @@ public:
 
 private:
     tcp::acceptor    acceptor_;
-    OrderBook&       book_;
+    MarketState&     market_;
     net::io_context& ioc_;
     SessionRegistry  registry_;
     TradeHistory     history_;
-    std::mutex       book_mutex_;
     std::atomic<uint64_t> next_order_id_{1};
 };

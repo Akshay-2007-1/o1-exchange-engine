@@ -3,6 +3,7 @@
   --panel: #171a1f;
   --panel-soft: #1d2229;
   --line: #2b313a;
+  --line-soft: rgba(43, 49, 58, 0.55);
   --text: #f2f5f7;
   --muted: #8e98a6;
   --buy: #25c18c;
@@ -21,8 +22,15 @@ body {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
+}
+
+h1,
+h2,
+p {
+  margin-top: 0;
 }
 
 .exchange-app {
@@ -40,8 +48,8 @@ input {
   align-items: flex-start;
   justify-content: space-between;
   gap: 18px;
-  margin: 0 auto 22px;
   max-width: 1320px;
+  margin: 0 auto 22px;
 }
 
 .eyebrow {
@@ -53,16 +61,16 @@ input {
   text-transform: uppercase;
 }
 
-h1,
-h2,
-p {
-  margin-top: 0;
-}
-
 h1 {
   margin-bottom: 0;
   font-size: 38px;
   line-height: 1;
+}
+
+.topbar small {
+  display: inline-block;
+  margin-top: 8px;
+  color: var(--muted);
 }
 
 .connection-stack {
@@ -76,9 +84,9 @@ h1 {
 .status-pill {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 8px;
   min-width: 136px;
-  justify-content: center;
   padding: 9px 12px;
   border: 1px solid var(--line);
   border-radius: 6px;
@@ -114,11 +122,12 @@ h1 {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 10px;
-  margin-bottom: 16px;
+  margin-bottom: 18px;
 }
 
 .stat,
-.panel {
+.panel,
+.market-cluster {
   border: 1px solid var(--line);
   background: rgba(23, 26, 31, 0.93);
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.24);
@@ -131,7 +140,8 @@ h1 {
 }
 
 .stat span,
-.panel-heading span {
+.panel-heading span,
+.cluster-header span {
   color: var(--muted);
   font-size: 12px;
   font-weight: 700;
@@ -154,9 +164,48 @@ h1 {
 
 .workspace {
   display: grid;
-  grid-template-columns: 320px minmax(420px, 1fr) 360px;
-  gap: 16px;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 18px;
   align-items: start;
+}
+
+.market-cluster {
+  border-radius: 10px;
+  overflow: hidden;
+  background:
+    linear-gradient(180deg, rgba(243, 201, 107, 0.04), transparent 110px),
+    rgba(23, 26, 31, 0.93);
+}
+
+.cluster-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--line-soft);
+  background: rgba(29, 34, 41, 0.58);
+}
+
+.cluster-label {
+  margin: 0 0 6px;
+  color: var(--gold);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.cluster-header h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.cluster-body {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  gap: 16px;
+  padding: 16px;
 }
 
 .panel {
@@ -231,6 +280,7 @@ label {
   text-transform: uppercase;
 }
 
+select,
 input {
   width: 100%;
   height: 44px;
@@ -242,8 +292,18 @@ input {
   outline: none;
 }
 
-input:focus {
+select {
+  padding-right: 36px;
+}
+
+input:focus,
+select:focus {
   border-color: var(--gold);
+}
+
+option {
+  background: #101317;
+  color: var(--text);
 }
 
 .error-text {
@@ -282,9 +342,17 @@ input:focus {
 
 .depth-list,
 .trade-list {
-  min-height: 388px;
   max-height: 560px;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.depth-list {
+  min-height: 388px;
+}
+
+.trade-list {
+  min-height: 540px;
 }
 
 .depth-row {
@@ -316,9 +384,9 @@ input:focus {
   display: flex;
   justify-content: center;
   align-items: center;
-  padding: 0;
   width: 28px;
   height: 28px;
+  padding: 0;
   border: 1px solid rgba(255, 98, 98, 0.46);
   border-radius: 6px;
   background: rgba(255, 98, 98, 0.1);
@@ -359,6 +427,11 @@ input:focus {
   background: var(--sell-soft);
 }
 
+.trade-panel {
+  position: sticky;
+  top: 28px;
+}
+
 .trade-row {
   display: flex;
   justify-content: space-between;
@@ -394,13 +467,27 @@ input:focus {
   text-align: center;
 }
 
-@media (max-width: 1100px) {
+@media (max-width: 1180px) {
   .workspace {
     grid-template-columns: 1fr;
   }
 
+  .trade-panel {
+    position: static;
+  }
+}
+
+@media (max-width: 960px) {
   .market-strip {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .cluster-body {
+    grid-template-columns: 1fr;
+  }
+
+  .book-grid {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -409,7 +496,8 @@ input:focus {
     padding: 18px;
   }
 
-  .topbar {
+  .topbar,
+  .cluster-header {
     flex-direction: column;
   }
 
@@ -421,8 +509,7 @@ input:focus {
     font-size: 30px;
   }
 
-  .market-strip,
-  .book-grid {
+  .market-strip {
     grid-template-columns: 1fr;
   }
 }
