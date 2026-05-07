@@ -1,13 +1,18 @@
 #include <iostream>
 #include <boost/asio/io_context.hpp>
 #include "OrderBook.h"
+#include "Market.h"
 #include "Server.h"
 
 int main() {
-    OrderBook book;
+    MarketState market({
+        {1, "APL", "Apollo Technologies", 1'000'000},
+        {2, "BLZ", "Blaze Manufacturing", 2'500'000},
+        {3, "CRN", "Crown Energy", 1'750'000}
+    });
 
     boost::asio::io_context ioc;
-    Server server(ioc, 9001, book);
+    Server server(ioc, 9001, market);
     server.run();
 
     return 0;

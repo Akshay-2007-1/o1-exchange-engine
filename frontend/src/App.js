@@ -29,6 +29,10 @@ function normalizedBook(msg) {
   const hasOrderSnapshots = Array.isArray(msg.buy_orders) && Array.isArray(msg.sell_orders);
 
   return {
+    companyId: msg.company_id,
+    companyName: msg.company_name,
+    companySymbol: msg.company_symbol,
+    totalShares: msg.total_shares,
     bids,
     asks,
     buyOrders: hasOrderSnapshots ? msg.buy_orders : bids,
@@ -123,6 +127,7 @@ function TradeFeed({ trades }) {
                 <span>{formatQuantity(trade.quantity)} shares</span>
               </div>
               <div className="trade-meta">
+                <span>{trade.company_name}</span>
                 <span>B{trade.buy_order_id} / S{trade.sell_order_id}</span>
                 <time>{trade.time}</time>
               </div>
@@ -137,6 +142,9 @@ function TradeFeed({ trades }) {
 export default function App() {
   const [connected, setConnected] = useState(false);
   const [trades, setTrades] = useState([]);
+  const [companies, setCompanies] = useState([]);
+  const [selectedCompanyId, setSelectedCompanyId] = useState(null);
+  const [selectedCompany, setSelectedCompany] = useState(null);
   const [bids, setBids] = useState([]);
   const [asks, setAsks] = useState([]);
   const [buyOrders, setBuyOrders] = useState([]);
@@ -147,6 +155,7 @@ export default function App() {
 
   const ws = useRef(null);
   const tradeSeq = useRef(1);
+  const selectedCompanyIdRef = useRef(null);
 
   const makeTradeRow = useCallback((trade, time = new Date().toLocaleTimeString()) => ({
     ...trade,
@@ -157,6 +166,14 @@ export default function App() {
   const applyBookSnapshot = useCallback(msg => {
     const book = normalizedBook(msg);
 
+    setSelectedCompany({
+      id: book.companyId,
+      name: book.companyName,
+      symbol: book.companySymbol,
+      totalShares: book.totalShares
+    });
+    selectedCompanyIdRef.current = book.companyId;
+    setSelectedCompanyId(book.companyId);
     setBids(book.bids);
     setAsks(book.asks);
     setBuyOrders(book.buyOrders);
@@ -191,10 +208,18 @@ export default function App() {
         }
 
         if (msg.type === "book") {
-          applyBookSnapshot(msg);
+          if (
+            selectedCompanyIdRef.current === null ||
+            Number(msg.company_id) === Number(selectedCompanyIdRef.current)
+          ) {
+            applyBookSnapshot(msg);
+          }
         }
 
         if (msg.type === "snapshot") {
+          if (Array.isArray(msg.companies)) {
+            setCompanies(msg.companies);
+          }
           applyTradeHistory(msg.trades || []);
           applyBookSnapshot(msg);
         }
@@ -217,6 +242,18 @@ export default function App() {
     return () => socket.close();
   }, [applyBookSnapshot, applyTradeHistory, makeTradeRow]);
 
+  const requestSnapshot = useCallback(companyId => {
+    if (!ws.current || ws.current.readyState !== WebSocket.OPEN) {
+      return;
+    }
+
+    setMarketReady(false);
+    ws.current.send(JSON.stringify({
+      type: "snapshot",
+      company_id: companyId
+    }));
+  }, []);
+
   const submitOrder = event => {
     event.preventDefault();
 
@@ -236,7 +273,8 @@ export default function App() {
     }
 
     const order = {
-      type: "order", 
+      type: "order",
+      company_id: selectedCompanyId,
       side: form.side,
       price: parseFloat(form.price),
       quantity: parseInt(form.quantity, 10),
@@ -266,6 +304,7 @@ export default function App() {
 
     ws.current.send(JSON.stringify({
       type: "cancel",
+      company_id: selectedCompanyId,
       side,
       order_id: row.id,
       price: Number(row.price)
@@ -288,6 +327,13 @@ export default function App() {
       askVolume: depthTotal(asks)
     };
   }, [bids, asks]);
+
+  const handleCompanyChange = event => {
+    const companyId = Number(event.target.value);
+    selectedCompanyIdRef.current = companyId;
+    setSelectedCompanyId(companyId);
+    requestSnapshot(companyId);
+  };
 
   return (
     <main className="exchange-app">
@@ -314,64 +360,87 @@ export default function App() {
       </section>
 
       <div className="workspace">
-        <section className="panel order-ticket">
-          <div className="panel-heading">
-            <h2>Order Ticket</h2>
-            <span>Limit order</span>
+        <section className="market-cluster">
+          <div className="cluster-header">
+            <div>
+              <p className="cluster-label">Selected Market</p>
+              <h2>{selectedCompany ? `${selectedCompany.name} (${selectedCompany.symbol})` : "Loading market"}</h2>
+            </div>
+            <span>{marketReady ? "Instrument-specific order flow" : "Refreshing book"}</span>
           </div>
 
-          <form onSubmit={submitOrder}>
-            <div className="side-toggle" role="group" aria-label="Order side">
-              {["BUY", "SELL"].map(side => (
-                <button
-                  type="button"
-                  key={side}
-                  className={form.side === side ? side.toLowerCase() : ""}
-                  onClick={() => setForm(current => ({ ...current, side }))}
-                >
-                  {side}
-                </button>
-              ))}
+          <div className="cluster-body">
+            <section className="panel order-ticket">
+            <div className="panel-heading">
+              <h2>Order Ticket</h2>
+              <span>Limit order</span>
             </div>
 
-            <label>
-              Price
-              <input
-                type="number"
-                min="0"
-                step="0.01"
-                inputMode="decimal"
-                placeholder="102.50"
-                value={form.price}
-                onChange={event => setForm(current => ({ ...current, price: event.target.value }))}
-              />
-            </label>
+            <form onSubmit={submitOrder}>
+              <div className="side-toggle" role="group" aria-label="Order side">
+                {["BUY", "SELL"].map(side => (
+                  <button
+                    type="button"
+                    key={side}
+                    className={form.side === side ? side.toLowerCase() : ""}
+                    onClick={() => setForm(current => ({ ...current, side }))}
+                  >
+                    {side}
+                  </button>
+                ))}
+              </div>
 
-            <label>
-              Quantity
-              <input
-                type="number"
-                min="1"
-                step="1"
-                inputMode="numeric"
-                placeholder="150"
-                value={form.quantity}
-                onChange={event => setForm(current => ({ ...current, quantity: event.target.value }))}
-              />
-            </label>
+              <label>
+                Company
+                <select value={selectedCompanyId ?? ""} onChange={handleCompanyChange}>
+                  {companies.map(company => (
+                    <option key={company.id} value={company.id}>
+                      {company.name} ({company.symbol})
+                    </option>
+                  ))}
+                </select>
+              </label>
 
-            {lastError && <p className="error-text">{lastError}</p>}
+              <label>
+                Price
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  inputMode="decimal"
+                  placeholder="102.50"
+                  value={form.price}
+                  onChange={event => setForm(current => ({ ...current, price: event.target.value }))}
+                />
+              </label>
 
-            <button className={`submit-order ${form.side.toLowerCase()}`} type="submit">
-              Send {form.side} Order
-            </button>
-          </form>
+              <label>
+                Quantity
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  inputMode="numeric"
+                  placeholder="150"
+                  value={form.quantity}
+                  onChange={event => setForm(current => ({ ...current, quantity: event.target.value }))}
+                />
+              </label>
+
+              {lastError && <p className="error-text">{lastError}</p>}
+
+              <button className={`submit-order ${form.side.toLowerCase()}`} type="submit">
+                Send {form.side} Order
+              </button>
+            </form>
+            </section>
+
+            <div className="book-grid">
+              <OrderTable title="Buy Orders" side="BUY" rows={buyOrders} onCancel={cancelOrder} />
+              <OrderTable title="Sell Orders" side="SELL" rows={sellOrders} onCancel={cancelOrder} />
+            </div>
+          </div>
         </section>
-
-        <div className="book-grid">
-          <OrderTable title="Buy Orders" side="BUY" rows={buyOrders} onCancel={cancelOrder} />
-          <OrderTable title="Sell Orders" side="SELL" rows={sellOrders} onCancel={cancelOrder} />
-        </div>
 
         <TradeFeed trades={trades} />
       </div>
