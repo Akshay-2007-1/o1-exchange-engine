@@ -150,12 +150,17 @@ export default function App() {
   const [buyOrders, setBuyOrders] = useState([]);
   const [sellOrders, setSellOrders] = useState([]);
   const [form, setForm] = useState({ side: "BUY", price: "", quantity: "" });
+  const [priceError, setPriceError] = useState("");
+  const [quantityError, setQuantityError] = useState("");
   const [lastError, setLastError] = useState("");
   const [marketReady, setMarketReady] = useState(false);
 
   const ws = useRef(null);
   const tradeSeq = useRef(1);
   const selectedCompanyIdRef = useRef(null);
+  const reconnectTimeoutRef = useRef(null);
+  const reconnectAttemptsRef = useRef(0);
+  const shouldReconnectRef = useRef(true);
 
   const makeTradeRow = useCallback((trade, time = new Date().toLocaleTimeString()) => ({
     ...trade,
@@ -163,6 +168,7 @@ export default function App() {
     time
   }), []);
 
+  
   const applyBookSnapshot = useCallback(msg => {
     const book = normalizedBook(msg);
 
@@ -185,13 +191,26 @@ export default function App() {
     setTrades(trades.slice(0, 20).map(trade => makeTradeRow(trade, "Earlier")));
   }, [makeTradeRow]);
 
-  useEffect(() => {
+  const connectWebSocket = useCallback(() => {
+    if (reconnectTimeoutRef.current !== null) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
+
+    if (
+      ws.current &&
+      (ws.current.readyState === WebSocket.OPEN || ws.current.readyState === WebSocket.CONNECTING)
+    ) {
+      return;
+    }
+
     const socket = new WebSocket(WS_URL);
 
     socket.onopen = () => {
       setConnected(true);
       setMarketReady(false);
       setLastError("");
+      reconnectAttemptsRef.current = 0;
       socket.send(JSON.stringify({ type: "snapshot" }));
     };
 
@@ -235,12 +254,39 @@ export default function App() {
     socket.onclose = () => {
       setConnected(false);
       setMarketReady(false);
+      if (ws.current === socket) {
+        ws.current = null;
+      }
+
+      if (shouldReconnectRef.current && reconnectTimeoutRef.current === null) {
+        const delay = Math.min(1000 * 2 ** reconnectAttemptsRef.current, 30000);
+        reconnectAttemptsRef.current += 1;
+        reconnectTimeoutRef.current = setTimeout(() => {
+          reconnectTimeoutRef.current = null;
+          connectWebSocket();
+        }, delay);
+      }
     };
 
     ws.current = socket;
-
-    return () => socket.close();
   }, [applyBookSnapshot, applyTradeHistory, makeTradeRow]);
+
+  useEffect(() => {
+    shouldReconnectRef.current = true;
+    connectWebSocket();
+
+    return () => {
+      shouldReconnectRef.current = false;
+      if (ws.current) {
+        ws.current.close();
+        ws.current = null;
+      }
+      if (reconnectTimeoutRef.current !== null) {
+        clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
+      }
+    };
+  }, [connectWebSocket]);
 
   const requestSnapshot = useCallback(companyId => {
     if (!ws.current || ws.current.readyState !== WebSocket.OPEN) {
@@ -268,7 +314,17 @@ export default function App() {
     }
 
     if (!form.price || !form.quantity) {
+      validatePrice(form.price);
+      validateQuantity(form.quantity);
       setLastError("Enter both price and quantity.");
+      return;
+    }
+
+    // Validate using inline validation states
+    const priceValid = validatePrice(form.price);
+    const quantityValid = validateQuantity(form.quantity);
+
+    if (!priceValid || !quantityValid) {
       return;
     }
 
@@ -283,6 +339,8 @@ export default function App() {
 
     ws.current.send(JSON.stringify(order));
     setForm(current => ({ ...current, price: "", quantity: "" }));
+    setPriceError("");
+    setQuantityError("");
     setLastError("");
   };
 
@@ -327,6 +385,64 @@ export default function App() {
       askVolume: depthTotal(asks)
     };
   }, [bids, asks]);
+
+  const validatePrice = value => {
+    if (value === "") {
+      setPriceError("");
+      setLastError("");
+      return false;
+    }
+    const num = parseFloat(value);
+    if (isNaN(num)) {
+      setPriceError("Must be a valid number");
+      setLastError("Enter a valid price and quantity.");
+      return false;
+    }
+    if (num <= 0) {
+      setPriceError("Must be greater than 0");
+      setLastError("Enter a valid price and quantity.");
+      return false;
+    }
+    if (num > 1000000) {
+      setPriceError("Must be less than 1,000,000");
+      setLastError("Enter a valid price and quantity.");
+      return false;
+    }
+    setPriceError("");
+    if (!quantityError) {
+      setLastError("");
+    }
+    return true;
+  };
+
+  const validateQuantity = value => {
+    if (value === "") {
+      setQuantityError("");
+      setLastError("");
+      return false;
+    }
+    const num = parseInt(value, 10);
+    if (isNaN(num)) {
+      setQuantityError("Must be a valid integer");
+      setLastError("Enter a valid price and quantity.");
+      return false;
+    }
+    if (num < 1) {
+      setQuantityError("Must be at least 1");
+      setLastError("Enter a valid price and quantity.");
+      return false;
+    }
+    if (num > 1000000) {
+      setQuantityError("Must be less than 1,000,000");
+      setLastError("Enter a valid price and quantity.");
+      return false;
+    }
+    setQuantityError("");
+    if (!priceError) {
+      setLastError("");
+    }
+    return true;
+  };
 
   const handleCompanyChange = event => {
     const companyId = Number(event.target.value);
@@ -405,13 +521,19 @@ export default function App() {
                 Price
                 <input
                   type="number"
-                  min="0"
+                  min="0.01"
+                  max="1000000"
                   step="0.01"
                   inputMode="decimal"
                   placeholder="102.50"
                   value={form.price}
-                  onChange={event => setForm(current => ({ ...current, price: event.target.value }))}
+                  onChange={event => {
+                    const value = event.target.value;
+                    setForm(current => ({ ...current, price: value }));
+                    validatePrice(value);
+                  }}
                 />
+                {priceError && <span className="error-text">{priceError}</span>}
               </label>
 
               <label>
@@ -419,12 +541,18 @@ export default function App() {
                 <input
                   type="number"
                   min="1"
+                  max="1000000"
                   step="1"
                   inputMode="numeric"
                   placeholder="150"
                   value={form.quantity}
-                  onChange={event => setForm(current => ({ ...current, quantity: event.target.value }))}
+                  onChange={event => {
+                    const value = event.target.value;
+                    setForm(current => ({ ...current, quantity: value }));
+                    validateQuantity(value);
+                  }}
                 />
+                {quantityError && <span className="error-text">{quantityError}</span>}
               </label>
 
               {lastError && <p className="error-text">{lastError}</p>}
