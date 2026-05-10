@@ -43,12 +43,12 @@ The exchange has three layers that communicate in one direction only — the fro
 │                    MarketState                              │
 │  map<company_id, InstrumentState>                           │
 │                                                             │
-│   InstrumentState (APL)    InstrumentState (BLZ)  ...      │
-│   ┌──────────────────┐     ┌──────────────────┐            │
-│   │  Company info    │     │  Company info    │            │
-│   │  OrderBook       │     │  OrderBook       │            │
-│   │  mutex           │     │  mutex           │            │
-│   └──────────────────┘     └──────────────────┘            │
+│   InstrumentState (APL)    InstrumentState (BLZ)  ...       │
+│   ┌──────────────────┐     ┌──────────────────┐             │
+│   │  Company info    │     │  Company info    │             │
+│   │  OrderBook       │     │  OrderBook       │             │
+│   │  mutex           │     │  mutex           │             │
+│   └──────────────────┘     └──────────────────┘             │
 └─────────────────────────────────────────────────────────────┘
 ```
 

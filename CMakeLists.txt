@@ -46,7 +46,8 @@ endif()
 # ── Main executable ────────────────────────
 add_executable(engine src/main.cpp src/server.cpp)
 target_include_directories(engine PRIVATE include)
-target_link_libraries(engine ${BOOST_LINK_LIB} pthread nlohmann_json::nlohmann_json)
+find_package(SQLite3 REQUIRED)
+target_link_libraries(engine ${BOOST_LINK_LIB} pthread nlohmann_json::nlohmann_json sqlite3 sodium)
 
 # ── Test executable ────────────────────────
 add_executable(tests tests/test_orderbook.cpp)
