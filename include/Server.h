@@ -7,12 +7,14 @@
 #include <memory>
 #include <string>
 #include <iostream>
+#include <map>
 #include <set>
 #include <mutex>
 #include <thread>
 #include <vector>
 #include <atomic>
 #include "Market.h"
+#include "Database.h"
 
 namespace beast     = boost::beast;
 namespace websocket = beast::websocket;
@@ -161,6 +163,9 @@ class Session : public std::enable_shared_from_this<Session> {
 public:
     websocket::stream<tcp::socket> ws_;
     MarketState& market_;
+    Database& db_;
+    std::map<uint64_t, int64_t>& order_user_map_;
+    std::mutex& order_map_mutex_;
     SessionRegistry& registry_;
     TradeHistory& history_;
     std::atomic<uint64_t>& next_order_id_;
@@ -168,13 +173,18 @@ public:
     beast::flat_buffer buffer_;
     std::mutex write_mutex_;
 
-    Session(tcp::socket socket, MarketState& market, SessionRegistry& registry, TradeHistory& history, std::atomic<uint64_t>& next_order_id)
+    Session(tcp::socket socket, MarketState& market, SessionRegistry& registry, 
+        TradeHistory& history, std::atomic<uint64_t>& next_order_id, Database& db, std::map<uint64_t, int64_t>& order_user_map,
+        std::mutex& order_map_mutex)
         : ws_(std::move(socket))
         , market_(market)
         , registry_(registry)
         , history_(history)
         , next_order_id_(next_order_id)
-        , default_company_id_(market.default_company_id()) {}
+        , default_company_id_(market.default_company_id())
+        , db_(db)
+        , order_user_map_(order_user_map)
+        , order_map_mutex_(order_map_mutex) {}
 
     void send(const std::string& msg) {
         try {
@@ -234,12 +244,95 @@ private:
         send(payload);
     }
 
+    void handle_register(const json& msg) {
+        std::string username = msg.value("username", "");
+        std::string password = msg.value("password", "");
+        std::string role     = msg.value("role", "trader");
+
+        if (username.empty() || password.empty()) {
+            send(json{
+                {"type", "error"},
+                {"message", "Username and password are required"}
+            }.dump());
+            return;
+        }
+
+        if (password.size() < 6) {
+            send(json{
+                {"type", "error"},
+                {"message", "Password must be at least 6 characters"}
+            }.dump());
+            return;
+        }
+
+        auto result = db_.create_user(username, password, role);
+
+        if (!result.ok) {
+            send(json{
+                {"type", "error"},
+                {"message", result.error}
+            }.dump());
+            return;
+        }
+
+        send(json{
+            {"type", "registered"},
+            {"user_id", result.id},
+            {"username", username},
+            {"message", "Account created successfully"}
+        }.dump());
+    }
+
+    void handle_login(const json& msg) {
+        std::string username = msg.value("username", "");
+        std::string password = msg.value("password", "");
+
+        if (username.empty() || password.empty()) {
+            send(json{
+                {"type", "error"},
+                {"message", "Username and password are required"}
+            }.dump());
+            return;
+        }
+
+        auto result = db_.login(username, password);
+
+        if (!result.ok) {
+            send(json{
+                {"type", "error"},
+                {"message", result.error}
+            }.dump());
+            return;
+        }
+
+        // result.error holds the token (we'll clean up the Result struct later)
+        std::string token = result.error;
+
+        send(json{
+            {"type", "logged_in"},
+            {"token", token},
+            {"user_id", result.id},
+            {"username", username},
+            {"message", "Login successful"}
+        }.dump());
+    }
+
     void handle_message(const std::string& raw) {
         try {
             auto msg = json::parse(raw);
 
             // Defensive check: ignore messages that aren't standard JSON objects
             if (!msg.is_object()) return;
+
+            if (msg.value("type", "") == "register") {
+                handle_register(msg);
+                return;
+            }
+
+            if (msg.value("type", "") == "login") {
+                handle_login(msg);
+                return;
+            }
 
             if (msg.value("type", "") == "snapshot") {
                 send_snapshot(msg.value("company_id", default_company_id_));
@@ -270,14 +363,64 @@ private:
             // Explicit check for orders
             if (msg.value("type", "") == "order") {
                 const int company_id = msg.value("company_id", default_company_id_);
+                const Side side = (msg["side"] == "BUY") ? Side::BUY : Side::SELL;
+                // ── Auth check ──────────────────────────
+                std::string token = msg.value("token", "");
+                if (token.empty()) {
+                    send(json{
+                        {"type", "error"},
+                        {"message", "Authentication required. Please log in."}
+                    }.dump());
+                    return;
+                }
+
+                auto session_result = db_.validate_session(token);
+                if (!session_result.ok) {
+                    send(json{
+                        {"type", "error"},
+                        {"message", session_result.error}
+                    }.dump());
+                    return;
+                }
+
+                int64_t user_id = session_result.id;
+
+                // ── Portfolio validation ─────────────────
+                if (side == Side::BUY) {
+                    double required_cash = msg["price"].get<double>() * msg["quantity"].get<uint32_t>();
+                    auto check = db_.reserve_cash(user_id, required_cash);
+                    if (!check.ok) {
+                        send(json{
+                            {"type", "error"},
+                            {"message", check.error}
+                        }.dump());
+                        return;
+                    }
+                } else {
+                    auto check = db_.reserve_shares(user_id, company_id, msg["quantity"].get<uint32_t>());
+                    if (!check.ok) {
+                        send(json{
+                            {"type", "error"},
+                            {"message", check.error}
+                        }.dump());
+                        return;
+                    }
+                }
+
                 InstrumentState* instrument = market_.find_instrument(company_id);
                 if (instrument == nullptr) return;
 
                 Order order;
                 order.id        = next_order_id_.fetch_add(1);
+                // store who owns this order
+                {
+                    std::lock_guard<std::mutex> lock(order_map_mutex_);
+                    order_user_map_[order.id] = user_id;
+                }
+
                 order.company_id = instrument->company.id;
                 order.company_name = instrument->company.name;
-                order.side      = (msg["side"] == "BUY") ? Side::BUY : Side::SELL;
+                order.side      = side;
                 order.price     = msg["price"].get<double>();
                 order.quantity  = msg["quantity"].get<uint32_t>();
                 order.timestamp = msg["timestamp"].get<uint64_t>();
@@ -316,7 +459,8 @@ public:
     Server(net::io_context& ioc, unsigned short port, MarketState& market)
         : acceptor_(ioc, tcp::endpoint(tcp::v4(), port))
         , market_(market)
-        , ioc_(ioc) {
+        , ioc_(ioc)
+        , db_("exchange.db") {
         for (const auto& company : market_.companies()) {
             InstrumentState* instrument = market_.find_instrument(company.id);
             if (instrument == nullptr) continue;
@@ -324,6 +468,22 @@ public:
             instrument->book.on_trade = [this](const Trade& t) {
                 history_.record(t);
                 registry_.broadcast(trade_to_json(t).dump());
+
+                // settle — look up who owns each side
+                std::lock_guard<std::mutex> lock(order_map_mutex_);
+                auto buyer_it  = order_user_map_.find(t.buy_order_id);
+                auto seller_it = order_user_map_.find(t.sell_order_id);
+
+                if (buyer_it != order_user_map_.end() &&
+                    seller_it != order_user_map_.end()) {
+                    db_.settle_trade(
+                        buyer_it->second,
+                        seller_it->second,
+                        t.company_id,
+                        t.quantity,
+                        t.price
+                    );
+                }
             };
         }
     }
@@ -336,7 +496,7 @@ public:
                 tcp::socket socket(ioc_);
                 acceptor_.accept(socket);
                 auto session = std::make_shared<Session>(
-                    std::move(socket), market_, registry_, history_, next_order_id_
+                    std::move(socket), market_, registry_, history_, next_order_id_, db_, order_user_map_, order_map_mutex_
                 );
                 std::thread([session]() { session->run(); }).detach();
             } catch (const std::exception& e) {
@@ -348,6 +508,9 @@ public:
 private:
     tcp::acceptor    acceptor_;
     MarketState&     market_;
+    Database db_;
+    std::map<uint64_t, int64_t> order_user_map_; // order_id → user_id
+    std::mutex order_map_mutex_;
     net::io_context& ioc_;
     SessionRegistry  registry_;
     TradeHistory     history_;
