@@ -218,12 +218,31 @@ Switching the company dropdown sends a `snapshot` request for that `company_id`.
 
 **Linux / WSL:**
 ```bash
-sudo apt-get install -y build-essential cmake libboost-all-dev
+sudo apt-get install -y build-essential cmake libboost-all-dev libsqlite3-dev libsodium-dev
 ```
 
 **Mac (Apple Silicon):**
 ```bash
-brew install cmake boost
+brew install cmake boost sqlite libsodium
+```
+
+**Node.js (for the React frontend):**
+
+Linux / WSL:
+```bash
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt-get install -y nodejs
+```
+
+Mac:
+```bash
+brew install node
+```
+
+Then install frontend dependencies:
+```bash
+cd frontend
+npm install
 ```
 
 ---
