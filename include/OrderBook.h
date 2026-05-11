@@ -15,7 +15,8 @@
 constexpr uint32_t MAX_PRICE = 100000;                     // Cap at $999.99 (99,999 cents)
 constexpr uint32_t BITMAP_L1_SIZE = (MAX_PRICE / 64) + 1;  // ~1563 elements
 constexpr uint32_t BITMAP_L2_SIZE = (BITMAP_L1_SIZE / 64) + 1; // ~25 elements
-// L3 is just a single uint64_t
+constexpr uint32_t MAX_ORDERS = 1000000;                   // Maximum concurrent open orders
+constexpr uint32_t NULL_IDX = -1;                          // Defines 'nullptr' for our array indices
 
 struct Order {
     uint64_t id;
@@ -35,26 +36,26 @@ struct Trade {
 };
 
 // ─────────────────────────────────────────
-//  OrderNode: Doubly-Linked List Node
+//  OrderNode: Zero-Allocation Linked Node
 // ─────────────────────────────────────────
 struct OrderNode {
     Order order;
-    OrderNode* prev = nullptr;
-    OrderNode* next = nullptr;
+    uint32_t prev_idx = NULL_IDX;
+    uint32_t next_idx = NULL_IDX;
 };
 
 // ─────────────────────────────────────────
-//  OrderList: The Queue for a Price Level
+//  OrderList: Queue metadata for a Price Level
 // ─────────────────────────────────────────
 struct OrderList {
-    OrderNode* head = nullptr;
-    OrderNode* tail = nullptr;
+    uint32_t head_idx = NULL_IDX;
+    uint32_t tail_idx = NULL_IDX;
     uint32_t total_quantity = 0;
     uint32_t order_count = 0;
 };
 
 // ─────────────────────────────────────────
-//  OrderBook: The O(1) Matching Engine
+//  OrderBook: The O(1) Zero-Allocation Engine
 // ─────────────────────────────────────────
 class OrderBook {
 public:
@@ -73,6 +74,21 @@ public:
 
     std::function<void(const Trade&)> on_trade;
 
+    OrderBook() {
+        // 1. Pre-allocate the memory for 1,000,000 orders
+        node_pool_.resize(MAX_ORDERS);
+        free_indices_.reserve(MAX_ORDERS);
+        
+        // 2. Populate the free list stack
+        for (uint32_t i = 0; i < MAX_ORDERS; ++i) {
+            // Push in reverse so we use lower indices first
+            free_indices_.push_back(MAX_ORDERS - 1 - i); 
+        }
+
+        // 3. Pre-size the hash map's bucket array to prevent re-hashing
+        order_map_.reserve(MAX_ORDERS);
+    }
+
     void add_order(Order order) {
         if (order.price >= MAX_PRICE) return; // Bounds protection
 
@@ -89,17 +105,18 @@ public:
         auto it = order_map_.find(order_id);
         if (it == order_map_.end()) return false;
 
-        OrderNode* node = it->second.get();
+        uint32_t target_idx = it->second;
+        OrderNode& node = node_pool_[target_idx];
         OrderList& list = side ? bids_[price] : asks_[price];
 
         // Stitch the doubly linked list back together in O(1)
-        if (node->prev) node->prev->next = node->next;
-        else list.head = node->next;
+        if (node.prev_idx != NULL_IDX) node_pool_[node.prev_idx].next_idx = node.next_idx;
+        else list.head_idx = node.next_idx;
 
-        if (node->next) node->next->prev = node->prev;
-        else list.tail = node->prev;
+        if (node.next_idx != NULL_IDX) node_pool_[node.next_idx].prev_idx = node.prev_idx;
+        else list.tail_idx = node.prev_idx;
 
-        list.total_quantity -= node->order.quantity;
+        list.total_quantity -= node.order.quantity;
         list.order_count--;
 
         // If level is now completely empty, update the hierarchical bitmap
@@ -107,8 +124,10 @@ public:
             clear_bit(side, price);
         }
 
-        // Deallocate node
+        // Recycle the memory!
+        free_indices_.push_back(target_idx);
         order_map_.erase(it);
+        
         return true;
     }
 
@@ -166,12 +185,13 @@ public:
 
     std::vector<OrderSnapshot> bid_orders(std::size_t limit = 100) const {
         std::vector<OrderSnapshot> snaps;
-        auto depth = bid_depth(limit); // Get active price levels
+        auto depth = bid_depth(limit); 
         for (const auto& level : depth) {
-            OrderNode* curr = bids_[level.price].head;
-            while (curr && snaps.size() < limit) {
-                snaps.push_back({curr->order.id, curr->order.timestamp, curr->order.price, curr->order.quantity});
-                curr = curr->next;
+            uint32_t curr_idx = bids_[level.price].head_idx;
+            while (curr_idx != NULL_IDX && snaps.size() < limit) {
+                const Order& o = node_pool_[curr_idx].order;
+                snaps.push_back({o.id, o.timestamp, o.price, o.quantity});
+                curr_idx = node_pool_[curr_idx].next_idx;
             }
             if (snaps.size() == limit) break;
         }
@@ -182,10 +202,11 @@ public:
         std::vector<OrderSnapshot> snaps;
         auto depth = ask_depth(limit);
         for (const auto& level : depth) {
-            OrderNode* curr = asks_[level.price].head;
-            while (curr && snaps.size() < limit) {
-                snaps.push_back({curr->order.id, curr->order.timestamp, curr->order.price, curr->order.quantity});
-                curr = curr->next;
+            uint32_t curr_idx = asks_[level.price].head_idx;
+            while (curr_idx != NULL_IDX && snaps.size() < limit) {
+                const Order& o = node_pool_[curr_idx].order;
+                snaps.push_back({o.id, o.timestamp, o.price, o.quantity});
+                curr_idx = node_pool_[curr_idx].next_idx;
             }
             if (snaps.size() == limit) break;
         }
@@ -193,12 +214,14 @@ public:
     }
 
 private:
+    // Memory Pool
+    std::vector<OrderNode> node_pool_;
+    std::vector<uint32_t> free_indices_;
+    std::unordered_map<uint64_t, uint32_t> order_map_; // Maps Order ID -> Pool Index
+
     // O(1) Arrays mapped strictly to price in cents
     OrderList bids_[MAX_PRICE];
     OrderList asks_[MAX_PRICE];
-
-    // O(1) Lookup table for mid-queue deletions
-    std::unordered_map<uint64_t, std::unique_ptr<OrderNode>> order_map_;
 
     // Hierarchical Bitmaps
     uint64_t bids_l1_[BITMAP_L1_SIZE] = {0};
@@ -272,20 +295,31 @@ private:
     }
 
     void insert_to_book(bool side, const Order& order) {
-        auto node = std::make_unique<OrderNode>();
-        node->order = order;
-        OrderNode* raw_ptr = node.get();
-        order_map_[order.id] = std::move(node);
+        if (free_indices_.empty()) {
+            std::cerr << "CRITICAL ERROR: Order pool exhausted.\n";
+            return; 
+        }
+
+        // Grab an unused index from the memory pool
+        uint32_t new_idx = free_indices_.back();
+        free_indices_.pop_back();
+
+        OrderNode& node = node_pool_[new_idx];
+        node.order = order;
+        node.prev_idx = NULL_IDX;
+        node.next_idx = NULL_IDX;
+
+        order_map_[order.id] = new_idx;
 
         OrderList& list = side ? bids_[order.price] : asks_[order.price];
 
-        if (list.tail == nullptr) {
-            list.head = list.tail = raw_ptr;
+        if (list.tail_idx == NULL_IDX) {
+            list.head_idx = list.tail_idx = new_idx;
             set_bit(side, order.price); // First order at this price activates the bit
         } else {
-            list.tail->next = raw_ptr;
-            raw_ptr->prev = list.tail;
-            list.tail = raw_ptr;
+            node_pool_[list.tail_idx].next_idx = new_idx;
+            node.prev_idx = list.tail_idx;
+            list.tail_idx = new_idx;
         }
 
         list.total_quantity += order.quantity;
@@ -311,9 +345,10 @@ private:
     }
 
     void execute_match(Order& incoming, OrderList& list, uint32_t exec_price, bool matching_against_bids) {
-        while (incoming.quantity > 0 && list.head != nullptr) {
-            OrderNode* resting_node = list.head;
-            Order& resting = resting_node->order;
+        while (incoming.quantity > 0 && list.head_idx != NULL_IDX) {
+            uint32_t resting_idx = list.head_idx;
+            OrderNode& resting_node = node_pool_[resting_idx];
+            Order& resting = resting_node.order;
 
             uint32_t fill_qty = std::min(incoming.quantity, resting.quantity);
 
@@ -332,12 +367,15 @@ private:
 
             if (resting.quantity == 0) {
                 // Unlink head
-                list.head = resting_node->next;
-                if (list.head) list.head->prev = nullptr;
-                else list.tail = nullptr;
+                list.head_idx = resting_node.next_idx;
+                if (list.head_idx != NULL_IDX) node_pool_[list.head_idx].prev_idx = NULL_IDX;
+                else list.tail_idx = NULL_IDX;
                 
                 list.order_count--;
-                order_map_.erase(resting.id); // Triggers unique_ptr cleanup
+                order_map_.erase(resting.id); 
+                
+                // Recycle the memory!
+                free_indices_.push_back(resting_idx);
             }
         }
     }
