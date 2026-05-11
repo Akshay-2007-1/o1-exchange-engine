@@ -28,7 +28,6 @@ inline json trade_to_json(const Trade& t) {
     json msg;
     msg["type"]          = "trade";
     msg["company_id"]    = t.company_id;
-    msg["company_name"]  = t.company_name;
     msg["price"]         = t.price;
     msg["quantity"]      = t.quantity;
     msg["buy_order_id"]  = t.buy_order_id;
@@ -134,9 +133,6 @@ private:
     std::vector<Trade> trades_;
 };
 
-// ─────────────────────────────────────────
-//  Registry: tracks all live sessions
-// ─────────────────────────────────────────
 class SessionRegistry {
 public:
     void add(std::shared_ptr<Session> s) {
@@ -156,9 +152,6 @@ private:
     std::mutex mutex_;
 };
 
-// ─────────────────────────────────────────
-//  One session per connected client
-// ─────────────────────────────────────────
 class Session : public std::enable_shared_from_this<Session> {
 public:
     websocket::stream<tcp::socket> ws_;
@@ -169,7 +162,7 @@ public:
     SessionRegistry& registry_;
     TradeHistory& history_;
     std::atomic<uint64_t>& next_order_id_;
-    int default_company_id_;
+    uint16_t default_company_id_;
     beast::flat_buffer buffer_;
     std::mutex write_mutex_;
 
@@ -198,7 +191,6 @@ public:
     }
 
     void run() {
-        // accept handshake
         try {
             ws_.accept();
         } catch (const std::exception& e) {
@@ -209,7 +201,6 @@ public:
         registry_.add(shared_from_this());
         send_snapshot(default_company_id_);
 
-        // read loop
         while (true) {
             try {
                 buffer_.clear();
@@ -221,7 +212,7 @@ public:
                     e.code() != boost::asio::error::connection_reset) {
                     std::cerr << "Session error: " << e.what() << "\n";
                 }
-                break;  // client disconnected cleanly — exit loop
+                break;
             } catch (const std::exception& e) {
                 std::cerr << "Unexpected session error: " << e.what() << "\n";
                 break;
@@ -232,7 +223,7 @@ public:
     }
 
 private:
-    void send_snapshot(int company_id) {
+    void send_snapshot(uint16_t company_id) {
         std::string payload;
         const InstrumentState* instrument = market_.find_instrument(company_id);
         if (instrument == nullptr) instrument = market_.find_instrument(default_company_id_);
@@ -250,28 +241,19 @@ private:
         std::string role     = msg.value("role", "trader");
 
         if (username.empty() || password.empty()) {
-            send(json{
-                {"type", "error"},
-                {"message", "Username and password are required"}
-            }.dump());
+            send(json{{"type", "error"}, {"message", "Username and password are required"}} .dump());
             return;
         }
 
         if (password.size() < 6) {
-            send(json{
-                {"type", "error"},
-                {"message", "Password must be at least 6 characters"}
-            }.dump());
+            send(json{{"type", "error"}, {"message", "Password must be at least 6 characters"}} .dump());
             return;
         }
 
         auto result = db_.create_user(username, password, role);
 
         if (!result.ok) {
-            send(json{
-                {"type", "error"},
-                {"message", result.error}
-            }.dump());
+            send(json{{"type", "error"}, {"message", result.error}} .dump());
             return;
         }
 
@@ -288,24 +270,17 @@ private:
         std::string password = msg.value("password", "");
 
         if (username.empty() || password.empty()) {
-            send(json{
-                {"type", "error"},
-                {"message", "Username and password are required"}
-            }.dump());
+            send(json{{"type", "error"}, {"message", "Username and password are required"}} .dump());
             return;
         }
 
         auto result = db_.login(username, password);
 
         if (!result.ok) {
-            send(json{
-                {"type", "error"},
-                {"message", result.error}
-            }.dump());
+            send(json{{"type", "error"}, {"message", result.error}} .dump());
             return;
         }
 
-        // result.error holds the token (we'll clean up the Result struct later)
         std::string token = result.error;
 
         send(json{
@@ -321,7 +296,6 @@ private:
         try {
             auto msg = json::parse(raw);
 
-            // Defensive check: ignore messages that aren't standard JSON objects
             if (!msg.is_object()) return;
 
             if (msg.value("type", "") == "register") {
@@ -340,17 +314,17 @@ private:
             }
 
             if (msg.value("type", "") == "cancel") {
-                const int company_id = msg.value("company_id", default_company_id_);
+                const uint16_t company_id = msg.value("company_id", default_company_id_);
                 InstrumentState* instrument = market_.find_instrument(company_id);
                 if (instrument == nullptr) return;
 
-                const Side side = (msg["side"] == "BUY") ? Side::BUY : Side::SELL;
-                const double price = msg["price"].get<double>();
+                const bool side = (msg["side"] == "BUY");
+                const uint32_t price = msg["price"].get<uint32_t>();
                 const uint64_t order_id = msg["order_id"].get<uint64_t>();
 
                 std::cout << "Cancel order #" << order_id
                           << " [" << instrument->company.symbol << "]"
-                          << " " << (side == Side::BUY ? "BUY" : "SELL")
+                          << " " << (side ? "BUY" : "SELL")
                           << " @ $" << price << "\n";
 
                 std::lock_guard<std::mutex> lock(instrument->mutex);
@@ -360,49 +334,42 @@ private:
                 return;
             }
 
-            // Explicit check for orders
             if (msg.value("type", "") == "order") {
-                const int company_id = msg.value("company_id", default_company_id_);
-                const Side side = (msg["side"] == "BUY") ? Side::BUY : Side::SELL;
-                // ── Auth check ──────────────────────────
+                const uint16_t company_id = msg.value("company_id", default_company_id_);
+                const bool side = (msg["side"] == "BUY");
+                const uint32_t price = msg["price"].get<uint32_t>();
+                
+                // Security Check for Max Price Array bounds
+                if (price >= 100000) {
+                     send(json{{"type", "error"}, {"message", "Price exceeds maximum allowed ($999.99)."}} .dump());
+                     return;
+                }
+                
                 std::string token = msg.value("token", "");
                 if (token.empty()) {
-                    send(json{
-                        {"type", "error"},
-                        {"message", "Authentication required. Please log in."}
-                    }.dump());
+                    send(json{{"type", "error"}, {"message", "Authentication required. Please log in."}} .dump());
                     return;
                 }
 
                 auto session_result = db_.validate_session(token);
                 if (!session_result.ok) {
-                    send(json{
-                        {"type", "error"},
-                        {"message", session_result.error}
-                    }.dump());
+                    send(json{{"type", "error"}, {"message", session_result.error}} .dump());
                     return;
                 }
 
                 int64_t user_id = session_result.id;
 
-                // ── Portfolio validation ─────────────────
-                if (side == Side::BUY) {
-                    double required_cash = msg["price"].get<double>() * msg["quantity"].get<uint32_t>();
+                if (side) { // BUY
+                    double required_cash = static_cast<double>(price) * msg["quantity"].get<uint32_t>();
                     auto check = db_.reserve_cash(user_id, required_cash);
                     if (!check.ok) {
-                        send(json{
-                            {"type", "error"},
-                            {"message", check.error}
-                        }.dump());
+                        send(json{{"type", "error"}, {"message", check.error}} .dump());
                         return;
                     }
                 } else {
                     auto check = db_.reserve_shares(user_id, company_id, msg["quantity"].get<uint32_t>());
                     if (!check.ok) {
-                        send(json{
-                            {"type", "error"},
-                            {"message", check.error}
-                        }.dump());
+                        send(json{{"type", "error"}, {"message", check.error}} .dump());
                         return;
                     }
                 }
@@ -412,22 +379,21 @@ private:
 
                 Order order;
                 order.id        = next_order_id_.fetch_add(1);
-                // store who owns this order
+
                 {
                     std::lock_guard<std::mutex> lock(order_map_mutex_);
                     order_user_map_[order.id] = user_id;
                 }
 
                 order.company_id = instrument->company.id;
-                order.company_name = instrument->company.name;
                 order.side      = side;
-                order.price     = msg["price"].get<double>();
+                order.price     = price;
                 order.quantity  = msg["quantity"].get<uint32_t>();
                 order.timestamp = msg["timestamp"].get<uint64_t>();
 
                 std::cout << "Order #" << order.id
                           << " [" << instrument->company.symbol << "]"
-                          << " " << (order.side == Side::BUY ? "BUY" : "SELL")
+                          << " " << (order.side ? "BUY" : "SELL")
                           << " " << order.quantity
                           << " @ $" << order.price << "\n";
 
@@ -442,7 +408,6 @@ private:
     }
 };
 
-// broadcast defined after Session
 inline void SessionRegistry::broadcast(const std::string& msg) {
     std::lock_guard<std::mutex> lock(mutex_);
     for (auto& s : sessions_) {
@@ -450,10 +415,6 @@ inline void SessionRegistry::broadcast(const std::string& msg) {
     }
 }
 
-// ─────────────────────────────────────────
-//  Server: accepts connections in a loop
-//  each client gets its own thread
-// ─────────────────────────────────────────
 class Server {
 public:
     Server(net::io_context& ioc, unsigned short port, MarketState& market)
@@ -469,7 +430,6 @@ public:
                 history_.record(t);
                 registry_.broadcast(trade_to_json(t).dump());
 
-                // settle — look up who owns each side
                 std::lock_guard<std::mutex> lock(order_map_mutex_);
                 auto buyer_it  = order_user_map_.find(t.buy_order_id);
                 auto seller_it = order_user_map_.find(t.sell_order_id);
@@ -509,7 +469,7 @@ private:
     tcp::acceptor    acceptor_;
     MarketState&     market_;
     Database db_;
-    std::map<uint64_t, int64_t> order_user_map_; // order_id → user_id
+    std::map<uint64_t, int64_t> order_user_map_; 
     std::mutex order_map_mutex_;
     net::io_context& ioc_;
     SessionRegistry  registry_;
