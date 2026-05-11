@@ -1,6 +1,11 @@
 cmake_minimum_required(VERSION 3.15)
 project(ExchangeEngine)
 
+# ── Homebrew Paths (For libsodium and other local packages) ──
+include_directories(/opt/homebrew/include /usr/local/include)
+link_directories(/opt/homebrew/lib /usr/local/lib)
+# ─────────────────────────────────────────────────────────────
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
@@ -35,7 +40,8 @@ endif()
 
 # ── Boost ─────────────────────────────────
 if(APPLE)
-    set(CMAKE_PREFIX_PATH /opt/homebrew/opt/boost)
+    # Appending instead of overwriting just in case
+    list(APPEND CMAKE_PREFIX_PATH "/opt/homebrew/opt/boost")
     find_package(Boost 1.74 REQUIRED)
     set(BOOST_LINK_LIB Boost::headers)
 else()

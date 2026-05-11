@@ -21,7 +21,11 @@ int main() {
     
     boost::asio::io_context ioc;
     Server server(ioc, 9001, market);
-    server.run();
+    
+    std::cout << "WebSocket server listening on port 9001...\n";
+    
+    // ioc.run() blocks the main thread and drives all the async_read/write callbacks
+    ioc.run();
 
     return 0;
 }
