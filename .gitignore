@@ -8,3 +8,4 @@ CMakeLists.txt
 .aider.chat.history.md
 .aider.tags.cache.v4/cache.db-shm
 .claude/settings.local.json
+.DS_Store
