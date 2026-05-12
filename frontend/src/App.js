@@ -9,8 +9,8 @@ const currency = new Intl.NumberFormat("en-US", {
   maximumFractionDigits: 2
 });
 
-function formatPrice(price) {
-  const value = Number(price);
+function formatPrice(cents) {
+  const value = Number(cents) / 100;
   return Number.isFinite(value) ? currency.format(value) : "--";
 }
 
@@ -108,7 +108,12 @@ function OrderTable({ title, side, rows, onCancel }) {
   );
 }
 
-function TradeFeed({ trades }) {
+function TradeFeed({ trades, companies }) {
+  const getCompanyIdentity = (id) => {
+    const company = companies.find(c => c.id === id);
+    return company ? `${company.name} (${company.symbol})` : `Company #${id}`;
+  };
+
   return (
     <section className="panel trade-panel">
       <div className="panel-heading">
@@ -127,7 +132,7 @@ function TradeFeed({ trades }) {
                 <span>{formatQuantity(trade.quantity)} shares</span>
               </div>
               <div className="trade-meta">
-                <span>{trade.company_name}</span>
+                <span>{getCompanyIdentity(trade.company_id)}</span>
                 <span>B{trade.buy_order_id} / S{trade.sell_order_id}</span>
                 <time>{trade.time}</time>
               </div>
@@ -168,7 +173,6 @@ export default function App() {
     time
   }), []);
 
-  
   const applyBookSnapshot = useCallback(msg => {
     const book = normalizedBook(msg);
 
@@ -320,7 +324,6 @@ export default function App() {
       return;
     }
 
-    // Validate using inline validation states
     const priceValid = validatePrice(form.price);
     const quantityValid = validateQuantity(form.quantity);
 
@@ -332,7 +335,7 @@ export default function App() {
       type: "order",
       company_id: selectedCompanyId,
       side: form.side,
-      price: parseFloat(form.price),
+      price: Math.round(parseFloat(form.price) * 100),
       quantity: parseInt(form.quantity, 10),
       timestamp: Date.now()
     };
@@ -403,9 +406,9 @@ export default function App() {
       setLastError("Enter a valid price and quantity.");
       return false;
     }
-    if (num > 1000000) {
-      setPriceError("Must be less than 1,000,000");
-      setLastError("Enter a valid price and quantity.");
+    if (num > 999.99) { // Bound updated here to $999.99 max
+      setPriceError("Must be less than $1,000.00");
+      setLastError("Price limit exceeded.");
       return false;
     }
     setPriceError("");
@@ -522,7 +525,7 @@ export default function App() {
                 <input
                   type="number"
                   min="0.01"
-                  max="1000000"
+                  max="999.99"
                   step="0.01"
                   inputMode="decimal"
                   placeholder="102.50"
@@ -570,7 +573,7 @@ export default function App() {
           </div>
         </section>
 
-        <TradeFeed trades={trades} />
+        <TradeFeed trades={trades} companies={companies} />
       </div>
     </main>
   );
