@@ -297,3 +297,155 @@ These three commits together represent one large refactor delivered in stages:
 3. `b391f40` makes the new architecture buildable, runnable, and testable.
 
 The overall effect is a shift from a more conventional educational exchange implementation to a much more specialized performance-oriented design with fixed bounds, explicit memory management, asynchronous networking, and batched persistence.
+
+## Commit 4: `b5ae976` - Vectorization And Dedicated Engine Concurrency
+
+This later Shrey commit continues the same performance arc, but it pushes even further on lookup costs and concurrency boundaries:
+
+- `b5ae976046ec17f831d50e43c14b6c48cd45d6c8`
+- `perf: hashmaps in OrderBook.h and Market.h replaced with vectors, optimisations made in Server.h to allow for better concurrency`
+
+### What changed
+
+#### `include/Market.h`
+
+The market-level instrument registry stops using a hash map and becomes a direct-mapped vector indexed by company id.
+
+Key changes:
+
+- `Company::id` is narrowed from `int` to `uint16_t`
+- `std::unordered_map<int, std::unique_ptr<InstrumentState>> instruments_` becomes `std::vector<std::unique_ptr<InstrumentState>> instruments_`
+- the constructor computes the maximum company id, resizes the vector once, and stores each instrument directly at `instruments_[company.id]`
+- `find_instrument()` becomes an indexed bounds-checked lookup instead of a hash-map lookup
+- the per-instrument mutex is removed with the comment that the dedicated matching engine thread now has exclusive ownership
+
+Why this matters:
+
+- market instrument lookup becomes direct array indexing
+- one more hash-based structure is removed from the hot path
+- ownership of order-book mutation becomes more explicit: the engine thread, not arbitrary session threads, is now the writer
+
+#### `include/OrderBook.h`
+
+This commit replaces the remaining hash-map lookup inside the order book with a direct-mapped vector and also embeds user ownership directly into orders and trades.
+
+Key structural changes:
+
+- `Order` gains `int64_t user_id`
+- `Trade` gains `buyer_user_id` and `seller_user_id`
+- `std::unordered_map<uint64_t, uint32_t> order_map_` is replaced by `std::vector<uint32_t> order_map_array_`
+- `order_map_array_` is sized once to `MAX_ORDERS` and used as a direct-mapped lookup table
+- `Order` and `OrderNode` are explicitly packed
+- `OrderNode` is padded so `sizeof(OrderNode) == 64`
+- a `static_assert` enforces the 64-byte cache-line-sized node layout
+
+The callback model also changes:
+
+- `std::function<void(const Trade&)> on_trade` is removed
+- a zero-allocation interface `ITradeListener` is introduced
+- `OrderBook` now exposes `ITradeListener* trade_listener`
+
+Why this matters:
+
+- the external `order_id -> user_id` ownership map in the server is no longer needed because user ids travel with the order itself
+- order lookup avoids hash-map overhead and rehashing concerns
+- the 64-byte node target is an explicit cache-locality optimization
+- the listener interface removes `std::function` overhead from the trade callback path
+
+Important nuance:
+
+- the direct-mapped order lookup uses `order_id % MAX_ORDERS`, so the implementation adds a collision check by verifying `node.order.id == order_id`
+- that means lookup is faster, but it relies on bounded active-order count and careful id handling rather than true unbounded hashing
+
+#### `include/Server.h`
+
+This is the biggest concurrency change in the commit.
+
+The earlier async session model is reworked so sessions no longer touch the order books directly. Instead, they enqueue engine work onto a dedicated engine thread.
+
+Key changes:
+
+- a lock-free `SPSCQueue<T, Size>` template is introduced
+- `EngineTask` is added with `ORDER`, `CANCEL`, and `SNAPSHOT` task types
+- `EngineQueue` is defined as `SPSCQueue<EngineTask, 65536>`
+- `Session` no longer keeps `history_`, `order_user_map_`, or `order_map_mutex_`
+- session handlers now enqueue order, cancel, and snapshot tasks instead of directly mutating the book or reading snapshots under locks
+- `Server` now implements `ITradeListener`
+- each instrument book sets `trade_listener = this`
+- `Server` starts a dedicated `engine_thread_` running `run_engine_worker()`
+
+The engine worker:
+
+- pops tasks from the SPSC queue
+- resolves the target instrument
+- executes `book.add_order(...)`, `book.cancel_order(...)`, or snapshot generation centrally
+- broadcasts updated books or sends session-specific snapshots from the engine side
+
+This is a major architectural simplification because it creates a clear single-writer rule for the matching engine.
+
+The DB path is also tightened further:
+
+- DB tasks move from `std::queue<DbTask>` to double-buffered vectors
+- `db_queue_front_` collects work while the engine is producing
+- the DB worker swaps `db_queue_front_` with `db_queue_back_` in O(1)
+- settlement then runs over the back buffer while the front buffer immediately becomes available for new trades
+
+Why this matters:
+
+- session threads stop contending on per-instrument mutexes because those mutexes are gone
+- order-book mutation becomes serialized through one dedicated engine thread
+- snapshot generation is also centralized with engine ownership
+- DB handoff becomes cheaper because the worker uses vector swap instead of repeatedly popping queue nodes
+
+#### `tests/test_orderbook.cpp`
+
+The tests are updated to reflect the new order-book interface and richer trade model.
+
+Key changes:
+
+- a `MockListener` implementing `ITradeListener` replaces direct `book.on_trade = ...`
+- orders now include `user_id`
+- tests continue validating matching, time priority, snapshots, and cancellation, but now through the listener interface
+
+This confirms that the API has shifted again:
+
+- trade callbacks are now interface-based
+- user ownership is part of the order/trade flow, not external server bookkeeping
+
+### Why this commit matters
+
+This commit removes two more important sources of overhead:
+
+- hash-based lookup in `MarketState`
+- hash-based lookup for `order_id -> node index` in `OrderBook`
+
+It also sharpens the concurrency model:
+
+- sessions become producers of engine tasks
+- one dedicated engine thread becomes the exclusive consumer and book mutator
+- the DB worker consumes completed trade settlements via double-buffered vectors
+
+That is a cleaner and more performance-oriented separation than the previous version, where async sessions still directly interacted with instrument state.
+
+### New tradeoffs introduced
+
+- direct-mapped vector lookup is faster, but it is less general than a true hash map and depends on bounded ids/capacity assumptions
+- a spin/yield push loop on the engine queue can waste CPU under sustained backpressure
+- the `order_id % MAX_ORDERS` scheme needs collision protection, which the commit adds via explicit id verification
+- removing per-instrument mutexes is only safe because the dedicated engine thread now owns mutation
+
+### Net effect relative to the earlier three commits
+
+If the earlier three commits:
+
+1. introduced the specialized bitmap-based engine
+2. preallocated order nodes and batched DB work
+3. fixed startup/build/test integration
+
+then `b5ae976` goes one step further by:
+
+4. replacing remaining hash-based hot-path lookups with vectors
+5. embedding user ownership directly into the order/trade pipeline
+6. moving all order-book mutation behind a dedicated engine thread with lock-free task handoff
+
+This makes the system even more specialized and lower overhead, while also making the single-writer concurrency model much clearer.
