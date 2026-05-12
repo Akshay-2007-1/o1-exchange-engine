@@ -8,13 +8,11 @@
 #include <memory>
 #include <string>
 #include <iostream>
-#include <map>
 #include <set>
 #include <mutex>
 #include <thread>
 #include <vector>
 #include <atomic>
-#include <queue>
 #include <condition_variable>
 #include "Market.h"
 #include "Database.h"
@@ -27,25 +25,59 @@ using json          = nlohmann::json;
 
 class Session;
 
+// Atomic Lock-Free Single-Producer Single-Consumer Queue
+template<typename T, size_t Size>
+class SPSCQueue {
+    static_assert((Size & (Size - 1)) == 0, "Size must be a power of 2 for bitwise optimization");
+    alignas(64) std::atomic<size_t> head_{0};
+    alignas(64) std::atomic<size_t> tail_{0};
+    alignas(64) T buffer_[Size];
+public:
+    bool push(const T& item) {
+        size_t tail = tail_.load(std::memory_order_relaxed);
+        size_t next_tail = (tail + 1) & (Size - 1);
+        if (next_tail == head_.load(std::memory_order_acquire)) return false;
+        buffer_[tail] = item;
+        tail_.store(next_tail, std::memory_order_release);
+        return true;
+    }
+    bool pop(T& item) {
+        size_t head = head_.load(std::memory_order_relaxed);
+        if (head == tail_.load(std::memory_order_acquire)) return false;
+        item = std::move(buffer_[head]);
+        head_.store((head + 1) & (Size - 1), std::memory_order_release);
+        return true;
+    }
+};
+
+struct EngineTask {
+    enum Type { ORDER, CANCEL, SNAPSHOT } type;
+    uint16_t company_id;
+    Order order;
+    bool side;
+    uint32_t price;
+    uint64_t order_id;
+    std::shared_ptr<Session> session;
+};
+
+using EngineQueue = SPSCQueue<EngineTask, 65536>;
+
+// JSON Serializers
 inline json trade_to_json(const Trade& t) {
-    json msg;
-    msg["type"]          = "trade";
-    msg["company_id"]    = t.company_id;
-    msg["price"]         = t.price;
-    msg["quantity"]      = t.quantity;
-    msg["buy_order_id"]  = t.buy_order_id;
-    msg["sell_order_id"] = t.sell_order_id;
-    return msg;
+    return {
+        {"type", "trade"},
+        {"company_id", t.company_id},
+        {"price", t.price},
+        {"quantity", t.quantity},
+        {"buy_order_id", t.buy_order_id},
+        {"sell_order_id", t.sell_order_id}
+    };
 }
 
 inline json depth_to_json(const std::vector<OrderBook::DepthLevel>& depth) {
     json levels = json::array();
     for (const auto& level : depth) {
-        levels.push_back({
-            {"price", level.price},
-            {"quantity", level.quantity},
-            {"orders", level.orders}
-        });
+        levels.push_back({{"price", level.price}, {"quantity", level.quantity}, {"orders", level.orders}});
     }
     return levels;
 }
@@ -53,12 +85,7 @@ inline json depth_to_json(const std::vector<OrderBook::DepthLevel>& depth) {
 inline json orders_to_json(const std::vector<OrderBook::OrderSnapshot>& orders) {
     json rows = json::array();
     for (const auto& order : orders) {
-        rows.push_back({
-            {"id", order.id},
-            {"price", order.price},
-            {"quantity", order.quantity},
-            {"timestamp", order.timestamp}
-        });
+        rows.push_back({{"id", order.id}, {"price", order.price}, {"quantity", order.quantity}, {"timestamp", order.timestamp}});
     }
     return rows;
 }
@@ -66,12 +93,7 @@ inline json orders_to_json(const std::vector<OrderBook::OrderSnapshot>& orders) 
 inline json companies_to_json(const std::vector<Company>& companies) {
     json rows = json::array();
     for (const auto& company : companies) {
-        rows.push_back({
-            {"id", company.id},
-            {"symbol", company.symbol},
-            {"name", company.name},
-            {"total_shares", company.total_shares}
-        });
+        rows.push_back({{"id", company.id}, {"symbol", company.symbol}, {"name", company.name}, {"total_shares", company.total_shares}});
     }
     return rows;
 }
@@ -111,11 +133,8 @@ public:
     void record(const Trade& trade) {
         std::lock_guard<std::mutex> lock(mutex_);
         trades_.push_back(trade);
-        if (trades_.size() > max_trades_) {
-            trades_.erase(trades_.begin());
-        }
+        if (trades_.size() > max_trades_) trades_.erase(trades_.begin());
     }
-
     json to_json() const {
         std::lock_guard<std::mutex> lock(mutex_);
         json trades = json::array();
@@ -124,7 +143,6 @@ public:
         }
         return { {"type", "history"}, {"trades", trades} };
     }
-
 private:
     static constexpr std::size_t max_trades_ = 100;
     mutable std::mutex mutex_;
@@ -137,53 +155,38 @@ public:
         std::lock_guard<std::mutex> lock(mutex_);
         sessions_.insert(s);
     }
-
     void remove(std::shared_ptr<Session> s) {
         std::lock_guard<std::mutex> lock(mutex_);
         sessions_.erase(s);
     }
-
     void broadcast(const std::string& msg);
-
 private:
     std::set<std::shared_ptr<Session>> sessions_;
     std::mutex mutex_;
 };
 
-// Async Session implementation
 class Session : public std::enable_shared_from_this<Session> {
 public:
     Session(tcp::socket socket, MarketState& market, SessionRegistry& registry, 
-        TradeHistory& history, std::atomic<uint64_t>& next_order_id, Database& db, 
-        std::map<uint64_t, int64_t>& order_user_map, std::mutex& order_map_mutex)
-        : ws_(std::move(socket))
-        , market_(market)
-        , registry_(registry)
-        , history_(history)
-        , next_order_id_(next_order_id)
-        , default_company_id_(market.default_company_id())
-        , db_(db)
-        , order_user_map_(order_user_map)
-        , order_map_mutex_(order_map_mutex) {}
+        std::atomic<uint64_t>& next_order_id, Database& db, EngineQueue& engine_queue)
+        : ws_(std::move(socket)), market_(market), registry_(registry)
+        , next_order_id_(next_order_id), default_company_id_(market.default_company_id())
+        , db_(db), engine_queue_(engine_queue) {}
 
     void start() {
-        // Accept the websocket handshake asynchronously
         ws_.async_accept([self = shared_from_this()](beast::error_code ec) {
             if (!ec) {
                 self->registry_.add(self);
-                self->send_snapshot(self->default_company_id_);
+                self->request_snapshot(self->default_company_id_);
                 self->do_read();
             }
         });
     }
 
     void send(std::string msg) {
-        // Post the write to the I/O strand to avoid concurrent async_write calls
         net::post(ws_.get_executor(), [self = shared_from_this(), msg = std::move(msg)]() {
             self->write_queue_.push_back(msg);
-            if (self->write_queue_.size() == 1) {
-                self->do_write();
-            }
+            if (self->write_queue_.size() == 1) self->do_write();
         });
     }
 
@@ -198,7 +201,7 @@ private:
             if (!ec) {
                 self->handle_message(beast::buffers_to_string(self->buffer_.data()));
                 self->buffer_.consume(self->buffer_.size());
-                self->do_read(); // Queue next read
+                self->do_read();
             }
         });
     }
@@ -207,25 +210,18 @@ private:
         ws_.async_write(net::buffer(write_queue_.front()), 
             [self = shared_from_this()](beast::error_code ec, std::size_t bytes_transferred) {
                 boost::ignore_unused(bytes_transferred);
-                if (ec) {
-                    self->registry_.remove(self);
-                    return;
-                }
+                if (ec) { self->registry_.remove(self); return; }
                 self->write_queue_.erase(self->write_queue_.begin());
-                if (!self->write_queue_.empty()) {
-                    self->do_write(); // Write next message in queue
-                }
+                if (!self->write_queue_.empty()) self->do_write();
             });
     }
 
-    void send_snapshot(uint16_t company_id) {
-        const InstrumentState* instrument = market_.find_instrument(company_id);
-        if (instrument == nullptr) instrument = market_.find_instrument(default_company_id_);
-        if (instrument == nullptr) return;
-
-        std::lock_guard<std::mutex> lock(instrument->mutex);
-        json history = history_.to_json();
-        send(snapshot_to_json(*instrument, history, market_.companies()).dump());
+    void request_snapshot(uint16_t company_id) {
+        EngineTask task;
+        task.type = EngineTask::SNAPSHOT;
+        task.company_id = company_id;
+        task.session = shared_from_this();
+        while (!engine_queue_.push(task)) std::this_thread::yield();
     }
 
     void handle_register(const json& msg) {
@@ -266,21 +262,16 @@ private:
 
             if (type == "register") { handle_register(msg); return; }
             if (type == "login")    { handle_login(msg); return; }
-            if (type == "snapshot") { send_snapshot(msg.value("company_id", default_company_id_)); return; }
+            if (type == "snapshot") { request_snapshot(msg.value("company_id", default_company_id_)); return; }
 
             if (type == "cancel") {
-                const uint16_t company_id = msg.value("company_id", default_company_id_);
-                InstrumentState* instrument = market_.find_instrument(company_id);
-                if (!instrument) return;
-
-                const bool side = (msg["side"] == "BUY");
-                const uint32_t price = msg["price"].get<uint32_t>();
-                const uint64_t order_id = msg["order_id"].get<uint64_t>();
-
-                std::lock_guard<std::mutex> lock(instrument->mutex);
-                if (instrument->book.cancel_order(side, price, order_id)) {
-                    registry_.broadcast(book_to_json(*instrument).dump());
-                }
+                EngineTask task;
+                task.type = EngineTask::CANCEL;
+                task.company_id = msg.value("company_id", default_company_id_);
+                task.side = (msg["side"] == "BUY");
+                task.price = msg["price"].get<uint32_t>();
+                task.order_id = msg["order_id"].get<uint64_t>();
+                while (!engine_queue_.push(task)) std::this_thread::yield();
                 return;
             }
 
@@ -303,7 +294,7 @@ private:
 
                 int64_t user_id = session_result.id;
 
-                if (side) { // BUY
+                if (side) { 
                     double required_cash = static_cast<double>(price) * msg["quantity"].get<uint32_t>();
                     auto check = db_.reserve_cash(user_id, required_cash);
                     if (!check.ok) { send(json{{"type", "error"}, {"message", check.error}} .dump()); return; }
@@ -312,25 +303,18 @@ private:
                     if (!check.ok) { send(json{{"type", "error"}, {"message", check.error}} .dump()); return; }
                 }
 
-                InstrumentState* instrument = market_.find_instrument(company_id);
-                if (!instrument) return;
-
-                Order order;
-                order.id        = next_order_id_.fetch_add(1);
-                order.company_id = instrument->company.id;
-                order.side      = side;
-                order.price     = price;
-                order.quantity  = msg["quantity"].get<uint32_t>();
-                order.timestamp = msg["timestamp"].get<uint64_t>();
-
-                {
-                    std::lock_guard<std::mutex> lock(order_map_mutex_);
-                    order_user_map_[order.id] = user_id;
-                }
-
-                std::lock_guard<std::mutex> lock(instrument->mutex);
-                instrument->book.add_order(order);
-                registry_.broadcast(book_to_json(*instrument).dump());
+                EngineTask task;
+                task.type = EngineTask::ORDER;
+                task.company_id = company_id;
+                task.order.id = next_order_id_.fetch_add(1, std::memory_order_relaxed);
+                task.order.user_id = user_id;
+                task.order.company_id = company_id;
+                task.order.side = side;
+                task.order.price = price;
+                task.order.quantity = msg["quantity"].get<uint32_t>();
+                task.order.timestamp = msg["timestamp"].get<uint64_t>();
+                
+                while (!engine_queue_.push(task)) std::this_thread::yield();
             }
         } catch (const std::exception& e) {
             std::cerr << "Message parse error: " << e.what() << "\n";
@@ -343,25 +327,18 @@ private:
 
     MarketState& market_;
     Database& db_;
-    std::map<uint64_t, int64_t>& order_user_map_;
-    std::mutex& order_map_mutex_;
     SessionRegistry& registry_;
-    TradeHistory& history_;
+    EngineQueue& engine_queue_;
     std::atomic<uint64_t>& next_order_id_;
     uint16_t default_company_id_;
 };
 
 inline void SessionRegistry::broadcast(const std::string& msg) {
     std::lock_guard<std::mutex> lock(mutex_);
-    for (auto& s : sessions_) {
-        s->send(msg);
-    }
+    for (auto& s : sessions_) s->send(msg);
 }
 
-// ─────────────────────────────────────────
-//  Server & Background DB Worker
-// ─────────────────────────────────────────
-class Server {
+class Server : public ITradeListener {
 public:
     struct DbTask {
         int64_t buyer_id;
@@ -372,36 +349,15 @@ public:
     };
 
     Server(net::io_context& ioc, unsigned short port, MarketState& market)
-        : acceptor_(ioc, tcp::endpoint(tcp::v4(), port))
-        , market_(market)
-        , db_("exchange.db") {
+        : acceptor_(ioc, tcp::endpoint(tcp::v4(), port)), market_(market), db_("exchange.db") {
         
-        // Spawn Background Worker Thread for SQLite Writes
-        db_worker_ = std::thread([this]() { run_db_worker(); });
-
         for (const auto& company : market_.companies()) {
             InstrumentState* instrument = market_.find_instrument(company.id);
-            if (!instrument) continue;
-
-            // Matching Engine Callback (Executes instantly in memory)
-            instrument->book.on_trade = [this](const Trade& t) {
-                history_.record(t);
-                registry_.broadcast(trade_to_json(t).dump());
-
-                std::lock_guard<std::mutex> lock(order_map_mutex_);
-                auto buyer_it  = order_user_map_.find(t.buy_order_id);
-                auto seller_it = order_user_map_.find(t.sell_order_id);
-
-                if (buyer_it != order_user_map_.end() && seller_it != order_user_map_.end()) {
-                    // Send to background queue instead of blocking matching engine
-                    {
-                        std::lock_guard<std::mutex> q_lock(db_q_mutex_);
-                        db_queue_.push({buyer_it->second, seller_it->second, t.company_id, t.quantity, t.price});
-                    }
-                    db_q_cv_.notify_one();
-                }
-            };
+            if (instrument) instrument->book.trade_listener = this;
         }
+
+        engine_thread_ = std::thread([this]() { run_engine_worker(); });
+        db_worker_ = std::thread([this]() { run_db_worker(); });
         
         do_accept();
     }
@@ -409,7 +365,20 @@ public:
     ~Server() {
         stop_worker_ = true;
         db_q_cv_.notify_all();
+        if (engine_thread_.joinable()) engine_thread_.join();
         if (db_worker_.joinable()) db_worker_.join();
+    }
+
+    // Engine executing a trade
+    void on_trade(const Trade& t) override {
+        history_.record(t);
+        registry_.broadcast(trade_to_json(t).dump());
+
+        {
+            std::lock_guard<std::mutex> q_lock(db_q_mutex_);
+            db_queue_front_.push_back({t.buyer_user_id, t.seller_user_id, t.company_id, t.quantity, t.price});
+        }
+        db_q_cv_.notify_one();
     }
 
 private:
@@ -418,58 +387,81 @@ private:
             [this](beast::error_code ec, tcp::socket socket) {
                 if (!ec) {
                     std::make_shared<Session>(
-                        std::move(socket), market_, registry_, history_, 
-                        next_order_id_, db_, order_user_map_, order_map_mutex_
+                        std::move(socket), market_, registry_, 
+                        next_order_id_, db_, engine_queue_
                     )->start();
                 }
-                do_accept(); // Loop
+                do_accept();
             });
     }
 
-    // Database Background Thread: Batches transactions together
-    void run_db_worker() {
-        std::vector<DbTask> batch;
-        while (true) {
-            {
-                std::unique_lock<std::mutex> lock(db_q_mutex_);
-                db_q_cv_.wait(lock, [this] { return !db_queue_.empty() || stop_worker_; });
-                
-                if (stop_worker_ && db_queue_.empty()) break;
+    // Match Engine Dedicated Spin-Loop
+    void run_engine_worker() {
+        EngineTask task;
+        while (!stop_worker_.load(std::memory_order_relaxed)) {
+            while (engine_queue_.pop(task)) {
+                InstrumentState* instrument = market_.find_instrument(task.company_id);
+                if (!instrument) continue;
 
-                // Pull everything currently in the queue
-                while (!db_queue_.empty()) {
-                    batch.push_back(db_queue_.front());
-                    db_queue_.pop();
+                if (task.type == EngineTask::ORDER) {
+                    instrument->book.add_order(task.order);
+                    registry_.broadcast(book_to_json(*instrument).dump());
+                } 
+                else if (task.type == EngineTask::CANCEL) {
+                    if (instrument->book.cancel_order(task.side, task.price, task.order_id)) {
+                        registry_.broadcast(book_to_json(*instrument).dump());
+                    }
+                } 
+                else if (task.type == EngineTask::SNAPSHOT) {
+                    json history = history_.to_json();
+                    std::string msg = snapshot_to_json(*instrument, history, market_.companies()).dump();
+                    if (task.session) task.session->send(msg);
                 }
-            }
-
-            if (!batch.empty()) {
-                // Massive performance gain: wrap batch in a single transaction
-                db_.begin_transaction();
-                for (const auto& task : batch) {
-                    db_.settle_trade(task.buyer_id, task.seller_id, task.company_id, task.quantity, task.price);
-                }
-                db_.commit_transaction();
-                batch.clear();
             }
         }
     }
 
-    tcp::acceptor    acceptor_;
-    MarketState&     market_;
-    Database         db_;
+    // Double-Buffered DB Vector Swap
+    void run_db_worker() {
+        db_queue_front_.reserve(1000);
+        db_queue_back_.reserve(1000);
+
+        while (true) {
+            {
+                std::unique_lock<std::mutex> lock(db_q_mutex_);
+                db_q_cv_.wait(lock, [this] { return !db_queue_front_.empty() || stop_worker_; });
+                if (stop_worker_ && db_queue_front_.empty()) break;
+                
+                // O(1) swap: Unlocks the engine immediately 
+                db_queue_front_.swap(db_queue_back_);
+            }
+
+            if (!db_queue_back_.empty()) {
+                db_.begin_transaction();
+                for (const auto& task : db_queue_back_) {
+                    db_.settle_trade(task.buyer_id, task.seller_id, task.company_id, task.quantity, task.price);
+                }
+                db_.commit_transaction();
+                db_queue_back_.clear(); // Preserves memory capacity for next batch
+            }
+        }
+    }
+
+    tcp::acceptor acceptor_;
+    MarketState&  market_;
+    Database      db_;
     
-    std::map<uint64_t, int64_t> order_user_map_; 
-    std::mutex order_map_mutex_;
-    
-    SessionRegistry  registry_;
-    TradeHistory     history_;
+    SessionRegistry registry_;
+    TradeHistory    history_;
+    EngineQueue     engine_queue_;
     std::atomic<uint64_t> next_order_id_{1};
 
-    // DB Worker Queue variables
-    std::queue<DbTask> db_queue_;
+    std::vector<DbTask> db_queue_front_;
+    std::vector<DbTask> db_queue_back_;
     std::mutex db_q_mutex_;
     std::condition_variable db_q_cv_;
-    bool stop_worker_ = false;
+    
+    std::atomic<bool> stop_worker_{false};
+    std::thread engine_thread_;
     std::thread db_worker_;
 };
