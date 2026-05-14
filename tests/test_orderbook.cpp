@@ -131,7 +131,7 @@ TEST(OrderBook, CancelOrderRemovesSpecificOrderAtPriceLevel) {
     book.add_order({2, 88, 2000, 10200, 200, 1, false});
     book.add_order({3, 77, 3000, 10200, 300, 1, false});
 
-    EXPECT_TRUE(book.cancel_order(false, 10200, 2));
+    EXPECT_TRUE(book.cancel_order(false, 10200, 2, 88));
 
     auto asks = book.ask_orders();
     ASSERT_EQ(asks.size(), 2);
@@ -152,12 +152,27 @@ TEST(OrderBook, CancelOrderErasesEmptyPriceKeyOnly) {
     book.add_order({1, 99, 1000, 10100, 100, 1, true});
     book.add_order({2, 88, 2000, 10200, 200, 1, true});
 
-    EXPECT_TRUE(book.cancel_order(true, 10200, 2));
-    
+    EXPECT_TRUE(book.cancel_order(true, 10200, 2, 88));
+
     auto bid_depth = book.bid_depth();
     EXPECT_EQ(bid_depth.size(), 1);
     EXPECT_EQ(bid_depth[0].price, 10100);
 
-    EXPECT_FALSE(book.cancel_order(true, 10200, 2));
-    EXPECT_FALSE(book.cancel_order(false, 10100, 1));
+    EXPECT_FALSE(book.cancel_order(true, 10200, 2, 88));
+    EXPECT_FALSE(book.cancel_order(false, 10100, 1, 99));
+}
+
+TEST(OrderBook, UnauthorizedCancelRejected) {
+    OrderBook book;
+
+    // Order 1 belongs to user 99
+    book.add_order({1, 99, 1000, 10100, 100, 1, true});
+
+    // User 88 tries to cancel User 99's order
+    EXPECT_FALSE(book.cancel_order(true, 10100, 1, 88));
+
+    // Order should still be in the book
+    auto bids = book.bid_orders();
+    ASSERT_EQ(bids.size(), 1);
+    EXPECT_EQ(bids[0].id, 1);
 }

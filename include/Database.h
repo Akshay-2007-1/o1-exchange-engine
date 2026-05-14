@@ -188,9 +188,40 @@ public:
         return {true, ""};
     }
 
+    struct UserProfile {
+        double cash;
+        std::vector<std::pair<uint16_t, uint32_t>> portfolio;
+    };
+
+    UserProfile get_user_profile(int64_t user_id) {
+        UserProfile profile = {0.0, {}};
+        std::lock_guard<std::mutex> lock(db_mutex_);
+
+        // Get Cash
+        sqlite3_clear_bindings(stmt_get_bal_);
+        sqlite3_bind_int64(stmt_get_bal_, 1, user_id);
+        if (sqlite3_step(stmt_get_bal_) == SQLITE_ROW) {
+            profile.cash = sqlite3_column_double(stmt_get_bal_, 0);
+        }
+        sqlite3_reset(stmt_get_bal_);
+
+        // Get Portfolio
+        sqlite3_clear_bindings(stmt_get_portfolio_);
+        sqlite3_bind_int64(stmt_get_portfolio_, 1, user_id);
+        while (sqlite3_step(stmt_get_portfolio_) == SQLITE_ROW) {
+            uint16_t cid = static_cast<uint16_t>(sqlite3_column_int(stmt_get_portfolio_, 0));
+            uint32_t shares = static_cast<uint32_t>(sqlite3_column_int(stmt_get_portfolio_, 1));
+            if (shares > 0) profile.portfolio.push_back({cid, shares});
+        }
+        sqlite3_reset(stmt_get_portfolio_);
+
+        return profile;
+    }
+
     // Called extremely fast in a background thread
     void settle_trade(int64_t buyer_id, int64_t seller_id, uint16_t company_id, uint32_t quantity, uint32_t price) {
-        double total = static_cast<double>(price) * quantity;
+        // Convert price (cents) to dollars for the balance table
+        double total = (static_cast<double>(price) / 100.0) * quantity;
         std::lock_guard<std::mutex> lock(db_mutex_);
 
         // Credit shares to buyer
@@ -223,6 +254,7 @@ private:
     sqlite3_stmt* stmt_val_sess_ = nullptr;
     sqlite3_stmt* stmt_get_bal_ = nullptr;
     sqlite3_stmt* stmt_get_shares_ = nullptr;
+    sqlite3_stmt* stmt_get_portfolio_ = nullptr;
     sqlite3_stmt* stmt_res_cash_ = nullptr;
     sqlite3_stmt* stmt_res_shares_ = nullptr;
     sqlite3_stmt* stmt_settle_shares_ = nullptr;
@@ -282,6 +314,7 @@ private:
         sqlite3_prepare_v2(db_, "SELECT user_id FROM sessions WHERE token = ? AND expires_at > ?;", -1, &stmt_val_sess_, nullptr);
         sqlite3_prepare_v2(db_, "SELECT cash FROM balances WHERE user_id = ?;", -1, &stmt_get_bal_, nullptr);
         sqlite3_prepare_v2(db_, "SELECT shares FROM portfolios WHERE user_id = ? AND company_id = ?;", -1, &stmt_get_shares_, nullptr);
+        sqlite3_prepare_v2(db_, "SELECT company_id, shares FROM portfolios WHERE user_id = ?;", -1, &stmt_get_portfolio_, nullptr);
         sqlite3_prepare_v2(db_, "UPDATE balances SET cash = cash - ? WHERE user_id = ?;", -1, &stmt_res_cash_, nullptr);
         sqlite3_prepare_v2(db_, "UPDATE portfolios SET shares = shares - ? WHERE user_id = ? AND company_id = ?;", -1, &stmt_res_shares_, nullptr);
         
@@ -299,6 +332,7 @@ private:
         sqlite3_finalize(stmt_val_sess_);
         sqlite3_finalize(stmt_get_bal_);
         sqlite3_finalize(stmt_get_shares_);
+        sqlite3_finalize(stmt_get_portfolio_);
         sqlite3_finalize(stmt_res_cash_);
         sqlite3_finalize(stmt_res_shares_);
         sqlite3_finalize(stmt_settle_shares_);
