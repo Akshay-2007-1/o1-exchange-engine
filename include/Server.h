@@ -57,6 +57,7 @@ struct EngineTask {
     bool side;
     uint32_t price;
     uint64_t order_id;
+    int64_t user_id;
     std::shared_ptr<Session> session;
 };
 
@@ -112,6 +113,18 @@ inline json book_to_json(const InstrumentState& instrument) {
     };
 }
 
+inline json profile_to_json(const Database::UserProfile& profile) {
+    json portfolio = json::array();
+    for (const auto& item : profile.portfolio) {
+        portfolio.push_back({{"company_id", item.first}, {"shares", item.second}});
+    }
+    return {
+        {"type", "user_update"},
+        {"cash", profile.cash},
+        {"portfolio", portfolio}
+    };
+}
+
 inline json snapshot_to_json(const InstrumentState& instrument, const json& history, const std::vector<Company>& companies) {
     return {
         {"type", "snapshot"},
@@ -160,6 +173,7 @@ public:
         sessions_.erase(s);
     }
     void broadcast(const std::string& msg);
+    void broadcast_user_update(int64_t user_id);
 private:
     std::set<std::shared_ptr<Session>> sessions_;
     std::mutex mutex_;
@@ -188,6 +202,13 @@ public:
             self->write_queue_.push_back(msg);
             if (self->write_queue_.size() == 1) self->do_write();
         });
+    }
+
+    int64_t user_id() const { return current_user_id_; }
+
+    void send_user_update() {
+        if (current_user_id_ == -1) return;
+        send(profile_to_json(db_.get_user_profile(current_user_id_)).dump());
     }
 
 private:
@@ -222,6 +243,8 @@ private:
         task.company_id = company_id;
         task.session = shared_from_this();
         while (!engine_queue_.push(task)) std::this_thread::yield();
+
+        send_user_update();
     }
 
     void handle_register(const json& msg) {
@@ -238,7 +261,9 @@ private:
             send(json{{"type", "error"}, {"message", result.error}} .dump());
             return;
         }
+        current_user_id_ = result.id;
         send(json{ {"type", "registered"}, {"user_id", result.id}, {"username", username}, {"message", "Account created successfully"} }.dump());
+        send_user_update();
     }
 
     void handle_login(const json& msg) {
@@ -250,7 +275,9 @@ private:
             send(json{{"type", "error"}, {"message", result.error}} .dump());
             return;
         }
+        current_user_id_ = result.id;
         send(json{ {"type", "logged_in"}, {"token", result.error}, {"user_id", result.id}, {"username", username}, {"message", "Login successful"} }.dump());
+        send_user_update();
     }
 
     void handle_message(const std::string& raw) {
@@ -262,15 +289,32 @@ private:
 
             if (type == "register") { handle_register(msg); return; }
             if (type == "login")    { handle_login(msg); return; }
-            if (type == "snapshot") { request_snapshot(msg.value("company_id", default_company_id_)); return; }
+            
+            if (type == "snapshot") { 
+                std::string token = msg.value("token", "");
+                if (!token.empty()) {
+                    auto res = db_.validate_session(token);
+                    if (res.ok) current_user_id_ = res.id;
+                }
+                request_snapshot(msg.value("company_id", default_company_id_)); 
+                return; 
+            }
 
             if (type == "cancel") {
+                std::string token = msg.value("token", "");
+                auto session_result = db_.validate_session(token);
+                if (!session_result.ok) {
+                    send(json{{"type", "error"}, {"message", "Authentication required to cancel."}} .dump());
+                    return;
+                }
+
                 EngineTask task;
                 task.type = EngineTask::CANCEL;
                 task.company_id = msg.value("company_id", default_company_id_);
                 task.side = (msg["side"] == "BUY");
                 task.price = msg["price"].get<uint32_t>();
                 task.order_id = msg["order_id"].get<uint64_t>();
+                task.user_id = session_result.id;
                 while (!engine_queue_.push(task)) std::this_thread::yield();
                 return;
             }
@@ -293,9 +337,11 @@ private:
                 }
 
                 int64_t user_id = session_result.id;
+                current_user_id_ = user_id;
 
                 if (side) { 
-                    double required_cash = static_cast<double>(price) * msg["quantity"].get<uint32_t>();
+                    // price is in cents, need to convert to dollars for DB balance check
+                    double required_cash = (static_cast<double>(price) / 100.0) * msg["quantity"].get<uint32_t>();
                     auto check = db_.reserve_cash(user_id, required_cash);
                     if (!check.ok) { send(json{{"type", "error"}, {"message", check.error}} .dump()); return; }
                 } else {
@@ -331,11 +377,21 @@ private:
     EngineQueue& engine_queue_;
     std::atomic<uint64_t>& next_order_id_;
     uint16_t default_company_id_;
+    int64_t current_user_id_ = -1;
 };
 
 inline void SessionRegistry::broadcast(const std::string& msg) {
     std::lock_guard<std::mutex> lock(mutex_);
     for (auto& s : sessions_) s->send(msg);
+}
+
+inline void SessionRegistry::broadcast_user_update(int64_t user_id) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (auto& s : sessions_) {
+        if (s->user_id() == user_id) {
+            s->send_user_update();
+        }
+    }
 }
 
 class Server : public ITradeListener {
@@ -408,7 +464,7 @@ private:
                     registry_.broadcast(book_to_json(*instrument).dump());
                 } 
                 else if (task.type == EngineTask::CANCEL) {
-                    if (instrument->book.cancel_order(task.side, task.price, task.order_id)) {
+                    if (instrument->book.cancel_order(task.side, task.price, task.order_id, task.user_id)) {
                         registry_.broadcast(book_to_json(*instrument).dump());
                     }
                 } 
@@ -438,10 +494,19 @@ private:
 
             if (!db_queue_back_.empty()) {
                 db_.begin_transaction();
+                std::set<int64_t> affected_users;
                 for (const auto& task : db_queue_back_) {
                     db_.settle_trade(task.buyer_id, task.seller_id, task.company_id, task.quantity, task.price);
+                    affected_users.insert(task.buyer_id);
+                    affected_users.insert(task.seller_id);
                 }
                 db_.commit_transaction();
+
+                // Broadcast updates AFTER commit to ensure users see fresh data
+                for (int64_t uid : affected_users) {
+                    registry_.broadcast_user_update(uid);
+                }
+                
                 db_queue_back_.clear(); // Preserves memory capacity for next batch
             }
         }

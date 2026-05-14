@@ -17,6 +17,8 @@ int main() {
         {3, "CRN", "Crown Energy", 1'750'000}
     });
     Database test_db("exchange.db");
+    test_db.create_user("shrey", "pass123");
+    test_db.create_user("akshay", "pass123");
     test_db.settle_trade(1, 1, 1, 500, 0.0); // give shrey 500 APL shares free
     
     boost::asio::io_context ioc;

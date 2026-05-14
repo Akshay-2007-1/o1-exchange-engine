@@ -81,6 +81,39 @@ h1 {
   color: var(--muted);
 }
 
+.user-profile {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+}
+
+.user-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.username {
+  color: var(--gold);
+  font-weight: 800;
+  font-size: 14px;
+}
+
+.logout-button {
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  padding: 6px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.logout-button:hover {
+  background: var(--line);
+  color: var(--text);
+}
+
 .status-pill {
   display: inline-flex;
   align-items: center;
@@ -162,11 +195,145 @@ h1 {
   color: var(--sell);
 }
 
+/* Auth Styles */
+.auth-page {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  padding: 28px;
+  color: var(--text);
+  background:
+    radial-gradient(circle at 50% 50%, rgba(243, 201, 107, 0.05), transparent 600px),
+    var(--bg);
+}
+
+.auth-card {
+  width: 100%;
+  max-width: 400px;
+  padding: 40px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: 0 40px 100px rgba(0, 0, 0, 0.4);
+  text-align: center;
+}
+
+.auth-card h2 {
+  margin-bottom: 8px;
+  font-size: 28px;
+}
+
+.auth-card p {
+  margin-bottom: 32px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.auth-card form {
+  display: grid;
+  gap: 20px;
+  text-align: left;
+}
+
+.auth-card .text-button {
+  margin-top: 24px;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.auth-card .text-button:hover {
+  color: var(--gold);
+}
+
+.success-text {
+  color: var(--buy);
+  font-size: 13px;
+  margin-top: 10px;
+}
+
+/* Loading Screen */
+.loading-screen {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--text);
+  gap: 20px;
+}
+
+.spinner {
+  width: 40px;
+  height: 40px;
+  border: 3px solid var(--line);
+  border-top-color: var(--gold);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
 .workspace {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 320px;
+  grid-template-columns: minmax(0, 1fr) 340px;
   gap: 18px;
   align-items: start;
+}
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  position: sticky;
+  top: 28px;
+}
+
+.wallet-panel {
+  padding: 0;
+}
+
+.cash-balance {
+  color: var(--gold) !important;
+  font-size: 16px !important;
+  font-family: monospace;
+}
+
+.portfolio-list {
+  padding: 16px;
+}
+
+.portfolio-list h3 {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.portfolio-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 8px 0;
+  border-top: 1px solid var(--line-soft);
+  font-size: 14px;
+}
+
+.portfolio-row .symbol {
+  font-weight: 800;
+  color: var(--text);
+}
+
+.portfolio-row .shares {
+  font-family: monospace;
+  color: var(--buy);
 }
 
 .market-cluster {
@@ -428,8 +595,7 @@ option {
 }
 
 .trade-panel {
-  position: sticky;
-  top: 28px;
+  /* position: sticky; handled by sidebar */
 }
 
 .trade-row {

@@ -49,6 +49,95 @@ function Stat({ label, value, tone }) {
   );
 }
 
+function Wallet({ cash, portfolio, companies }) {
+  const getCompanySymbol = (id) => {
+    return companies.find(c => c.id === id)?.symbol || `#${id}`;
+  };
+
+  return (
+    <section className="panel wallet-panel">
+      <div className="panel-heading">
+        <h2>Your Account</h2>
+        <span className="cash-balance">${currency.format(cash)}</span>
+      </div>
+      <div className="portfolio-list">
+        <h3>Portfolio</h3>
+        {portfolio.length === 0 ? (
+          <div className="empty-state">No shares held</div>
+        ) : (
+          portfolio.map(item => (
+            <div className="portfolio-row" key={item.company_id}>
+              <span className="symbol">{getCompanySymbol(item.company_id)}</span>
+              <span className="shares">{formatQuantity(item.shares)}</span>
+            </div>
+          ))
+        )}
+      </div>
+    </section>
+  );
+}
+
+function LoginForm({ onLogin, onSwitch, error }) {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    onLogin(username, password);
+  };
+
+  return (
+    <section className="auth-card">
+      <h2>Welcome Back</h2>
+      <p>Log in to your O(1) Exchange account</p>
+      <form onSubmit={handleSubmit}>
+        <label>
+          Username
+          <input type="text" value={username} onChange={e => setUsername(e.target.value)} required />
+        </label>
+        <label>
+          Password
+          <input type="password" value={password} onChange={e => setPassword(e.target.value)} required />
+        </label>
+        {error && <p className="error-text">{error}</p>}
+        <button type="submit" className="submit-order buy">Login</button>
+      </form>
+      <button className="text-button" onClick={onSwitch}>Need an account? Register</button>
+    </section>
+  );
+}
+
+function RegisterForm({ onRegister, onSwitch, error, success }) {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    onRegister(username, password);
+  };
+
+  return (
+    <section className="auth-card">
+      <h2>Create Account</h2>
+      <p>Join the future of high-frequency trading</p>
+      <form onSubmit={handleSubmit}>
+        <label>
+          Username
+          <input type="text" value={username} onChange={e => setUsername(e.target.value)} required />
+        </label>
+        <label>
+          Password
+          <input type="password" value={password} onChange={e => setPassword(e.target.value)} required minLength={6} />
+        </label>
+        {error && <p className="error-text">{error}</p>}
+        {success && <p className="success-text">{success}</p>}
+        <button type="submit" className="submit-order buy">Register</button>
+      </form>
+      <button className="text-button" onClick={onSwitch}>Already have an account? Login</button>
+    </section>
+  );
+}
+
 function OrderTable({ title, side, rows, onCancel }) {
   const maxQuantity = Math.max(...rows.map(row => Number(row.quantity || 0)), 1);
   const hasOrderIds = rows.some(row => row.id !== undefined);
@@ -145,6 +234,13 @@ function TradeFeed({ trades, companies }) {
 }
 
 export default function App() {
+  const [view, setView] = useState("LOADING"); // LOADING, LOGIN, REGISTER, DASHBOARD
+  const [user, setUser] = useState(null);
+  const [cash, setCash] = useState(0);
+  const [portfolio, setPortfolio] = useState([]);
+  const [authError, setAuthError] = useState("");
+  const [authSuccess, setAuthSuccess] = useState("");
+
   const [connected, setConnected] = useState(false);
   const [trades, setTrades] = useState([]);
   const [companies, setCompanies] = useState([]);
@@ -167,12 +263,6 @@ export default function App() {
   const reconnectAttemptsRef = useRef(0);
   const shouldReconnectRef = useRef(true);
 
-  const makeTradeRow = useCallback((trade, time = new Date().toLocaleTimeString()) => ({
-    ...trade,
-    rowId: `${trade.buy_order_id}-${trade.sell_order_id}-${tradeSeq.current++}`,
-    time
-  }), []);
-
   const applyBookSnapshot = useCallback(msg => {
     const book = normalizedBook(msg);
 
@@ -193,7 +283,7 @@ export default function App() {
 
   const applyTradeHistory = useCallback(trades => {
     setTrades(trades.slice(0, 20).map(trade => makeTradeRow(trade, "Earlier")));
-  }, [makeTradeRow]);
+  }, []);
 
   const connectWebSocket = useCallback(() => {
     if (reconnectTimeoutRef.current !== null) {
@@ -215,12 +305,54 @@ export default function App() {
       setMarketReady(false);
       setLastError("");
       reconnectAttemptsRef.current = 0;
-      socket.send(JSON.stringify({ type: "snapshot" }));
+
+      // Check for saved session
+      const savedUser = localStorage.getItem("exchange_user");
+      if (savedUser) {
+        const parsed = JSON.parse(savedUser);
+        setUser(parsed);
+        setView("DASHBOARD");
+        socket.send(JSON.stringify({ 
+          type: "snapshot",
+          token: parsed.token
+        }));
+      } else {
+        setView("LOGIN");
+      }
     };
 
     socket.onmessage = event => {
       try {
         const msg = JSON.parse(event.data);
+
+        if (msg.type === "error") {
+          setAuthError(msg.message);
+          setLastError(msg.message);
+        }
+
+        if (msg.type === "registered") {
+          setAuthSuccess(msg.message);
+          setAuthError("");
+          setTimeout(() => setView("LOGIN"), 1500);
+        }
+
+        if (msg.type === "logged_in") {
+          const userData = {
+            token: msg.token,
+            userId: msg.user_id,
+            username: msg.username
+          };
+          localStorage.setItem("exchange_user", JSON.stringify(userData));
+          setUser(userData);
+          setAuthError("");
+          setView("DASHBOARD");
+          socket.send(JSON.stringify({ type: "snapshot" }));
+        }
+
+        if (msg.type === "user_update") {
+          setCash(msg.cash);
+          setPortfolio(msg.portfolio || []);
+        }
 
         if (msg.type === "trade") {
           setTrades(prev => [makeTradeRow(msg), ...prev].slice(0, 20));
@@ -273,7 +405,7 @@ export default function App() {
     };
 
     ws.current = socket;
-  }, [applyBookSnapshot, applyTradeHistory, makeTradeRow]);
+  }, [applyBookSnapshot, applyTradeHistory]);
 
   useEffect(() => {
     shouldReconnectRef.current = true;
@@ -292,6 +424,32 @@ export default function App() {
     };
   }, [connectWebSocket]);
 
+  const makeTradeRow = (trade, time = new Date().toLocaleTimeString()) => ({
+    ...trade,
+    rowId: `${trade.buy_order_id}-${trade.sell_order_id}-${tradeSeq.current++}`,
+    time
+  });
+
+  const handleLogin = (username, password) => {
+    if (ws.current?.readyState === WebSocket.OPEN) {
+      ws.current.send(JSON.stringify({ type: "login", username, password }));
+    }
+  };
+
+  const handleRegister = (username, password) => {
+    if (ws.current?.readyState === WebSocket.OPEN) {
+      ws.current.send(JSON.stringify({ type: "register", username, password }));
+    }
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem("exchange_user");
+    setUser(null);
+    setCash(0);
+    setPortfolio([]);
+    setView("LOGIN");
+  };
+
   const requestSnapshot = useCallback(companyId => {
     if (!ws.current || ws.current.readyState !== WebSocket.OPEN) {
       return;
@@ -300,9 +458,10 @@ export default function App() {
     setMarketReady(false);
     ws.current.send(JSON.stringify({
       type: "snapshot",
-      company_id: companyId
+      company_id: companyId,
+      token: user?.token
     }));
-  }, []);
+  }, [user]);
 
   const submitOrder = event => {
     event.preventDefault();
@@ -333,6 +492,7 @@ export default function App() {
 
     const order = {
       type: "order",
+      token: user?.token,
       company_id: selectedCompanyId,
       side: form.side,
       price: Math.round(parseFloat(form.price) * 100),
@@ -365,6 +525,7 @@ export default function App() {
 
     ws.current.send(JSON.stringify({
       type: "cancel",
+      token: user?.token,
       company_id: selectedCompanyId,
       side,
       order_id: row.id,
@@ -406,7 +567,7 @@ export default function App() {
       setLastError("Enter a valid price and quantity.");
       return false;
     }
-    if (num > 999.99) { // Bound updated here to $999.99 max
+    if (num > 999.99) {
       setPriceError("Must be less than $1,000.00");
       setLastError("Price limit exceeded.");
       return false;
@@ -454,6 +615,52 @@ export default function App() {
     requestSnapshot(companyId);
   };
 
+  if (view === "LOADING") {
+    return (
+      <div className="loading-screen">
+        <div className="spinner" />
+        <p>Connecting to O(1) Exchange...</p>
+      </div>
+    );
+  }
+
+  if (view === "LOGIN") {
+    return (
+      <main className="auth-page">
+        <header className="topbar">
+          <div>
+            <p className="eyebrow">NUS Orbital 2026 · Apollo</p>
+            <h1>O(1) Exchange</h1>
+          </div>
+        </header>
+        <LoginForm 
+          onLogin={handleLogin} 
+          onSwitch={() => { setView("REGISTER"); setAuthError(""); }} 
+          error={authError} 
+        />
+      </main>
+    );
+  }
+
+  if (view === "REGISTER") {
+    return (
+      <main className="auth-page">
+        <header className="topbar">
+          <div>
+            <p className="eyebrow">NUS Orbital 2026 · Apollo</p>
+            <h1>O(1) Exchange</h1>
+          </div>
+        </header>
+        <RegisterForm 
+          onRegister={handleRegister} 
+          onSwitch={() => { setView("LOGIN"); setAuthError(""); setAuthSuccess(""); }} 
+          error={authError}
+          success={authSuccess}
+        />
+      </main>
+    );
+  }
+
   return (
     <main className="exchange-app">
       <header className="topbar">
@@ -461,12 +668,18 @@ export default function App() {
           <p className="eyebrow">NUS Orbital 2026 · Apollo</p>
           <h1>O(1) Exchange</h1>
         </div>
-        <div className="connection-stack">
-          <span className={`status-pill ${connected ? "live" : "offline"}`}>
-            <span />
-            {connected ? "LIVE" : "DISCONNECTED"}
-          </span>
-          <small>{WS_URL.replace("ws://", "")}</small>
+        <div className="user-profile">
+          <div className="user-info">
+            <span className="username">{user?.username}</span>
+            <button className="logout-button" onClick={handleLogout}>Logout</button>
+          </div>
+          <div className="connection-stack">
+            <span className={`status-pill ${connected ? "live" : "offline"}`}>
+              <span />
+              {connected ? "LIVE" : "DISCONNECTED"}
+            </span>
+            <small>{WS_URL.replace("ws://", "")}</small>
+          </div>
         </div>
       </header>
 
@@ -573,7 +786,10 @@ export default function App() {
           </div>
         </section>
 
-        <TradeFeed trades={trades} companies={companies} />
+        <div className="sidebar">
+          <Wallet cash={cash} portfolio={portfolio} companies={companies} />
+          <TradeFeed trades={trades} companies={companies} />
+        </div>
       </div>
     </main>
   );

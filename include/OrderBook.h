@@ -88,9 +88,11 @@ public:
         order_map_array_.resize(MAX_ORDERS, NULL_IDX);
     }
 
-    void add_order(const Order& order) {
+    void add_order(const Order& order_ref) {
         // C++20 branch prediction hint: bounds checks should almost never fail
-        if (order.price >= MAX_PRICE) [[unlikely]] return; 
+        if (order_ref.price >= MAX_PRICE) [[unlikely]] return; 
+
+        Order order = order_ref;
 
         if (order.side) { 
             match_buy(order);
@@ -101,14 +103,14 @@ public:
         }
     }
 
-    bool cancel_order(bool side, uint32_t price, uint64_t order_id) {
+    bool cancel_order(bool side, uint32_t price, uint64_t order_id, int64_t user_id) {
         uint32_t target_idx = order_map_array_[order_id % MAX_ORDERS];
         if (target_idx == NULL_IDX) return false;
 
         OrderNode& node = node_pool_[target_idx];
         
-        // Protection against ID wrap-around collisions
-        if (node.order.id != order_id) [[unlikely]] return false;
+        // Protection against ID wrap-around collisions and unauthorized cancellation
+        if (node.order.id != order_id || node.order.user_id != user_id) [[unlikely]] return false;
 
         OrderList& list = side ? bids_[price] : asks_[price];
 
@@ -322,8 +324,7 @@ private:
         list.order_count++;
     }
 
-    void match_buy(const Order& incoming_ref) {
-        Order incoming = incoming_ref;
+    void match_buy(Order& incoming) {
         int32_t best_ask = get_best_ask();
         while (incoming.quantity > 0 && best_ask != -1 && best_ask <= incoming.price) {
             execute_match(incoming, asks_[best_ask], best_ask, false);
@@ -332,8 +333,7 @@ private:
         }
     }
 
-    void match_sell(const Order& incoming_ref) {
-        Order incoming = incoming_ref;
+    void match_sell(Order& incoming) {
         int32_t best_bid = get_best_bid();
         while (incoming.quantity > 0 && best_bid != -1 && best_bid >= incoming.price) {
             execute_match(incoming, bids_[best_bid], best_bid, true);
