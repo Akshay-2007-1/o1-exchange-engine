@@ -32,7 +32,6 @@ struct OrderNode {
 };
 #pragma pack(pop)
 
-// Enforce exact L1 cache line size fit
 static_assert(sizeof(OrderNode) == 64, "OrderNode must be exactly 64 bytes to prevent false sharing and cache straddling");
 
 struct Trade {
@@ -45,7 +44,6 @@ struct Trade {
     uint16_t company_id;
 };
 
-// Zero-allocation callback interface
 class ITradeListener {
 public:
     virtual ~ITradeListener() = default;
@@ -69,6 +67,7 @@ public:
 
     struct OrderSnapshot {
         uint64_t id;
+        int64_t  user_id; // Added to filter for "My Open Orders"
         uint64_t timestamp;
         uint32_t price;
         uint32_t quantity;
@@ -84,12 +83,10 @@ public:
             free_indices_.push_back(MAX_ORDERS - 1 - i); 
         }
 
-        // Direct-mapped array replacing std::unordered_map
         order_map_array_.resize(MAX_ORDERS, NULL_IDX);
     }
 
     void add_order(const Order& order_ref) {
-        // C++20 branch prediction hint: bounds checks should almost never fail
         if (order_ref.price >= MAX_PRICE) [[unlikely]] return; 
 
         Order order = order_ref;
@@ -109,7 +106,6 @@ public:
 
         OrderNode& node = node_pool_[target_idx];
         
-        // Protection against ID wrap-around collisions, unauthorized cancellation, and wrong side
         if (node.order.id != order_id || node.order.user_id != user_id || node.order.side != side) [[unlikely]] return false;
 
         OrderList& list = side ? bids_[price] : asks_[price];
@@ -192,7 +188,7 @@ public:
             uint32_t curr_idx = bids_[level.price].head_idx;
             while (curr_idx != NULL_IDX && snaps.size() < limit) {
                 const Order& o = node_pool_[curr_idx].order;
-                snaps.push_back({o.id, o.timestamp, o.price, o.quantity});
+                snaps.push_back({o.id, o.user_id, o.timestamp, o.price, o.quantity});
                 curr_idx = node_pool_[curr_idx].next_idx;
             }
             if (snaps.size() == limit) break;
@@ -207,7 +203,7 @@ public:
             uint32_t curr_idx = asks_[level.price].head_idx;
             while (curr_idx != NULL_IDX && snaps.size() < limit) {
                 const Order& o = node_pool_[curr_idx].order;
-                snaps.push_back({o.id, o.timestamp, o.price, o.quantity});
+                snaps.push_back({o.id, o.user_id, o.timestamp, o.price, o.quantity});
                 curr_idx = node_pool_[curr_idx].next_idx;
             }
             if (snaps.size() == limit) break;
@@ -218,7 +214,7 @@ public:
 private:
     std::vector<OrderNode> node_pool_;
     std::vector<uint32_t> free_indices_;
-    std::vector<uint32_t> order_map_array_; // O(1) direct-mapped lookup
+    std::vector<uint32_t> order_map_array_;
 
     OrderList bids_[MAX_PRICE];
     OrderList asks_[MAX_PRICE];
