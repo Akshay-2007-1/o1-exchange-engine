@@ -25,7 +25,6 @@ using json          = nlohmann::json;
 
 class Session;
 
-// Atomic Lock-Free Single-Producer Single-Consumer Queue
 template<typename T, size_t Size>
 class SPSCQueue {
     static_assert((Size & (Size - 1)) == 0, "Size must be a power of 2 for bitwise optimization");
@@ -63,6 +62,18 @@ struct EngineTask {
 
 using EngineQueue = SPSCQueue<EngineTask, 65536>;
 
+// --- BINARY PROTOCOL STRUCTS ---
+#pragma pack(push, 1)
+struct BinaryTradeMsg {
+    uint8_t  msg_type;     // 1 byte  (Type 1 = Trade)
+    uint16_t company_id;   // 2 bytes
+    uint32_t price;        // 4 bytes
+    uint32_t quantity;     // 4 bytes
+    uint64_t buy_order_id; // 8 bytes
+    uint64_t sell_order_id;// 8 bytes
+}; // Total: 27 bytes (Blistering fast WebSocket frame)
+#pragma pack(pop)
+
 // JSON Serializers
 inline json trade_to_json(const Trade& t) {
     return {
@@ -86,7 +97,8 @@ inline json depth_to_json(const std::vector<OrderBook::DepthLevel>& depth) {
 inline json orders_to_json(const std::vector<OrderBook::OrderSnapshot>& orders) {
     json rows = json::array();
     for (const auto& order : orders) {
-        rows.push_back({{"id", order.id}, {"price", order.price}, {"quantity", order.quantity}, {"timestamp", order.timestamp}});
+        // user_id is passed down so UI can filter My Orders
+        rows.push_back({{"id", order.id}, {"user_id", order.user_id}, {"price", order.price}, {"quantity", order.quantity}, {"timestamp", order.timestamp}});
     }
     return rows;
 }
@@ -172,11 +184,16 @@ public:
         std::lock_guard<std::mutex> lock(mutex_);
         sessions_.erase(s);
     }
-    void broadcast(const std::string& msg);
+    void broadcast(const std::string& msg, bool is_binary = false);
     void broadcast_user_update(int64_t user_id);
 private:
     std::set<std::shared_ptr<Session>> sessions_;
     std::mutex mutex_;
+};
+
+struct OutboundMsg {
+    std::string payload;
+    bool is_binary;
 };
 
 class Session : public std::enable_shared_from_this<Session> {
@@ -197,9 +214,9 @@ public:
         });
     }
 
-    void send(std::string msg) {
-        net::post(ws_.get_executor(), [self = shared_from_this(), msg = std::move(msg)]() {
-            self->write_queue_.push_back(msg);
+    void send(std::string msg, bool is_binary = false) {
+        net::post(ws_.get_executor(), [self = shared_from_this(), msg = std::move(msg), is_binary]() {
+            self->write_queue_.push_back({msg, is_binary});
             if (self->write_queue_.size() == 1) self->do_write();
         });
     }
@@ -228,7 +245,8 @@ private:
     }
 
     void do_write() {
-        ws_.async_write(net::buffer(write_queue_.front()), 
+        ws_.text(!write_queue_.front().is_binary);
+        ws_.async_write(net::buffer(write_queue_.front().payload), 
             [self = shared_from_this()](beast::error_code ec, std::size_t bytes_transferred) {
                 boost::ignore_unused(bytes_transferred);
                 if (ec) { self->registry_.remove(self); return; }
@@ -340,7 +358,6 @@ private:
                 current_user_id_ = user_id;
 
                 if (side) { 
-                    // price is in cents, need to convert to dollars for DB balance check
                     double required_cash = (static_cast<double>(price) / 100.0) * msg["quantity"].get<uint32_t>();
                     auto check = db_.reserve_cash(user_id, required_cash);
                     if (!check.ok) { send(json{{"type", "error"}, {"message", check.error}} .dump()); return; }
@@ -369,7 +386,7 @@ private:
 
     websocket::stream<tcp::socket> ws_;
     beast::flat_buffer buffer_;
-    std::vector<std::string> write_queue_;
+    std::vector<OutboundMsg> write_queue_;
 
     MarketState& market_;
     Database& db_;
@@ -380,9 +397,9 @@ private:
     int64_t current_user_id_ = -1;
 };
 
-inline void SessionRegistry::broadcast(const std::string& msg) {
+inline void SessionRegistry::broadcast(const std::string& msg, bool is_binary) {
     std::lock_guard<std::mutex> lock(mutex_);
-    for (auto& s : sessions_) s->send(msg);
+    for (auto& s : sessions_) s->send(msg, is_binary);
 }
 
 inline void SessionRegistry::broadcast_user_update(int64_t user_id) {
@@ -425,10 +442,20 @@ public:
         if (db_worker_.joinable()) db_worker_.join();
     }
 
-    // Engine executing a trade
     void on_trade(const Trade& t) override {
         history_.record(t);
-        registry_.broadcast(trade_to_json(t).dump());
+
+        // Serialize directly into packed binary format avoiding JSON stringification overhead
+        BinaryTradeMsg btm;
+        btm.msg_type      = 1; 
+        btm.company_id    = t.company_id;
+        btm.price         = t.price;
+        btm.quantity      = t.quantity;
+        btm.buy_order_id  = t.buy_order_id;
+        btm.sell_order_id = t.sell_order_id;
+
+        std::string bin_payload(reinterpret_cast<const char*>(&btm), sizeof(btm));
+        registry_.broadcast(bin_payload, true);
 
         {
             std::lock_guard<std::mutex> q_lock(db_q_mutex_);
@@ -451,7 +478,6 @@ private:
             });
     }
 
-    // Match Engine Dedicated Spin-Loop
     void run_engine_worker() {
         EngineTask task;
         while (!stop_worker_.load(std::memory_order_relaxed)) {
@@ -477,7 +503,6 @@ private:
         }
     }
 
-    // Double-Buffered DB Vector Swap
     void run_db_worker() {
         db_queue_front_.reserve(1000);
         db_queue_back_.reserve(1000);
@@ -488,7 +513,6 @@ private:
                 db_q_cv_.wait(lock, [this] { return !db_queue_front_.empty() || stop_worker_; });
                 if (stop_worker_ && db_queue_front_.empty()) break;
                 
-                // O(1) swap: Unlocks the engine immediately 
                 db_queue_front_.swap(db_queue_back_);
             }
 
@@ -502,12 +526,11 @@ private:
                 }
                 db_.commit_transaction();
 
-                // Broadcast updates AFTER commit to ensure users see fresh data
                 for (int64_t uid : affected_users) {
                     registry_.broadcast_user_update(uid);
                 }
                 
-                db_queue_back_.clear(); // Preserves memory capacity for next batch
+                db_queue_back_.clear(); 
             }
         }
     }

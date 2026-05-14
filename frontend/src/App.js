@@ -138,10 +138,10 @@ function RegisterForm({ onRegister, onSwitch, error, success }) {
   );
 }
 
-function OrderTable({ title, side, rows, onCancel }) {
+// OrderTable is now read-only for the public depth
+function OrderTable({ title, side, rows }) {
   const maxQuantity = Math.max(...rows.map(row => Number(row.quantity || 0)), 1);
   const hasOrderIds = rows.some(row => row.id !== undefined);
-  const canCancel = hasOrderIds && typeof onCancel === "function";
 
   return (
     <section className="panel depth-panel">
@@ -150,11 +150,10 @@ function OrderTable({ title, side, rows, onCancel }) {
         <span>{rows.length} {hasOrderIds ? "open" : "levels"}</span>
       </div>
 
-      <div className={`depth-header ${canCancel ? "with-cancel" : ""}`}>
+      <div className="depth-header">
         <span>Price</span>
         <span>Qty</span>
         <span>{hasOrderIds ? "Order" : "Orders"}</span>
-        {canCancel && <span />}
       </div>
 
       <div className="depth-list">
@@ -167,27 +166,13 @@ function OrderTable({ title, side, rows, onCancel }) {
 
             return (
               <div
-                className={`depth-row ${side.toLowerCase()} ${canCancel ? "with-cancel" : ""}`}
+                className={`depth-row ${side.toLowerCase()}`}
                 key={`${side}-${rowKey}-${row.timestamp || ""}`}
               >
                 <div className="depth-bar" style={{ width }} />
                 <span className="price">${formatPrice(row.price)}</span>
                 <span>{formatQuantity(row.quantity)}</span>
                 <span className="order-id">{row.id !== undefined ? `#${row.id}` : row.orders}</span>
-                {canCancel && (
-                  <button
-                    type="button"
-                    className="cancel-order"
-                    aria-label={`Cancel ${side.toLowerCase()} order ${row.id}`}
-                    title={`Cancel order #${row.id}`}
-                    onClick={() => onCancel(side, row)}
-                  >
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                      <line x1="18" y1="6" x2="6" y2="18" />
-                      <line x1="6" y1="6" x2="18" y2="18" />
-                    </svg>
-                  </button>
-                )}
               </div>
             );
           })
@@ -197,10 +182,53 @@ function OrderTable({ title, side, rows, onCancel }) {
   );
 }
 
+// Dedicated secure cancellation panel
+function MyOrdersPanel({ orders, onCancel, companies }) {
+  const getCompanySymbol = (id) => companies.find(c => c.id === id)?.symbol || `#${id}`;
+
+  return (
+     <section className="panel bottom-panel">
+       <div className="panel-heading">
+         <h2>My Open Orders</h2>
+         <span>{orders.length} Active</span>
+       </div>
+       <div className="my-orders-header">
+         <span>Side</span>
+         <span>Symbol</span>
+         <span>Price</span>
+         <span>Quantity</span>
+         <span>Order ID</span>
+         <span />
+       </div>
+       <div className="my-orders-list">
+         {orders.length === 0 ? <div className="empty-state">No open orders</div> : (
+            orders.map(o => (
+               <div className="my-order-row" key={o.id}>
+                  <span className={`my-order-side ${o.side.toLowerCase()}`}>{o.side}</span>
+                  <span className="my-order-symbol">{getCompanySymbol(o.company_id)}</span>
+                  <span>${formatPrice(o.price)}</span>
+                  <span>{formatQuantity(o.quantity)}</span>
+                  <span className="my-order-id">#{o.id}</span>
+                  <div className="my-order-action">
+                    <button 
+                      className="cancel-btn" 
+                      onClick={() => onCancel(o.side, o)}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+               </div>
+            ))
+         )}
+       </div>
+     </section>
+  );
+}
+
 function TradeFeed({ trades, companies }) {
   const getCompanyIdentity = (id) => {
     const company = companies.find(c => c.id === id);
-    return company ? `${company.name} (${company.symbol})` : `Company #${id}`;
+    return company ? company.symbol : `ID:${id}`;
   };
 
   return (
@@ -216,13 +244,10 @@ function TradeFeed({ trades, companies }) {
         ) : (
           trades.map(trade => (
             <div className="trade-row" key={trade.rowId}>
-              <div>
-                <strong>${formatPrice(trade.price)}</strong>
-                <span>{formatQuantity(trade.quantity)} shares</span>
-              </div>
+              <span className="trade-price">${formatPrice(trade.price)}</span>
+              <span className="trade-qty">{formatQuantity(trade.quantity)}</span>
               <div className="trade-meta">
-                <span>{getCompanyIdentity(trade.company_id)}</span>
-                <span>B{trade.buy_order_id} / S{trade.sell_order_id}</span>
+                <span className="trade-symbol">{getCompanyIdentity(trade.company_id)}</span>
                 <time>{trade.time}</time>
               </div>
             </div>
@@ -299,6 +324,8 @@ export default function App() {
     }
 
     const socket = new WebSocket(WS_URL);
+    // Crucial: Instruct browser to not convert blobs, giving us raw binary access
+    socket.binaryType = "arraybuffer";
 
     socket.onopen = () => {
       setConnected(true);
@@ -306,7 +333,6 @@ export default function App() {
       setLastError("");
       reconnectAttemptsRef.current = 0;
 
-      // Check for saved session
       const savedUser = localStorage.getItem("exchange_user");
       if (savedUser) {
         const parsed = JSON.parse(savedUser);
@@ -322,6 +348,26 @@ export default function App() {
     };
 
     socket.onmessage = event => {
+      // Hot-path binary parsing
+      if (event.data instanceof ArrayBuffer) {
+        const view = new DataView(event.data);
+        const msgType = view.getUint8(0);
+        
+        if (msgType === 1) { // BinaryTradeMsg
+          const trade = {
+            type: "trade",
+            company_id: view.getUint16(1, true),
+            price: view.getUint32(3, true),
+            quantity: view.getUint32(7, true),
+            buy_order_id: Number(view.getBigUint64(11, true)),
+            sell_order_id: Number(view.getBigUint64(19, true))
+          };
+          setTrades(prev => [makeTradeRow(trade), ...prev].slice(0, 20));
+        }
+        return;
+      }
+
+      // JSON Control-Path Parsing
       try {
         const msg = JSON.parse(event.data);
 
@@ -352,10 +398,6 @@ export default function App() {
         if (msg.type === "user_update") {
           setCash(msg.cash);
           setPortfolio(msg.portfolio || []);
-        }
-
-        if (msg.type === "trade") {
-          setTrades(prev => [makeTradeRow(msg), ...prev].slice(0, 20));
         }
 
         if (msg.type === "history") {
@@ -518,15 +560,10 @@ export default function App() {
       return;
     }
 
-    if (row.id === undefined) {
-      setLastError("Cannot cancel a price level without a specific order id.");
-      return;
-    }
-
     ws.current.send(JSON.stringify({
       type: "cancel",
       token: user?.token,
-      company_id: selectedCompanyId,
+      company_id: row.company_id || selectedCompanyId, 
       side,
       order_id: row.id,
       price: Number(row.price)
@@ -549,6 +586,13 @@ export default function App() {
       askVolume: depthTotal(asks)
     };
   }, [bids, asks]);
+
+  const myOpenOrders = useMemo(() => {
+    if (!user) return [];
+    const buys = buyOrders.filter(o => Number(o.user_id) === Number(user.userId)).map(o => ({...o, side: "BUY", company_id: selectedCompanyId}));
+    const sells = sellOrders.filter(o => Number(o.user_id) === Number(user.userId)).map(o => ({...o, side: "SELL", company_id: selectedCompanyId}));
+    return [...buys, ...sells].sort((a,b) => b.timestamp - a.timestamp);
+  }, [buyOrders, sellOrders, user, selectedCompanyId]);
 
   const validatePrice = value => {
     if (value === "") {
@@ -692,104 +736,108 @@ export default function App() {
       </section>
 
       <div className="workspace">
-        <section className="market-cluster">
-          <div className="cluster-header">
-            <div>
-              <p className="cluster-label">Selected Market</p>
-              <h2>{selectedCompany ? `${selectedCompany.name} (${selectedCompany.symbol})` : "Loading market"}</h2>
-            </div>
-            <span>{marketReady ? "Instrument-specific order flow" : "Refreshing book"}</span>
-          </div>
-
-          <div className="cluster-body">
-            <section className="panel order-ticket">
-            <div className="panel-heading">
-              <h2>Order Ticket</h2>
-              <span>Limit order</span>
+        <div className="top-row">
+          <section className="market-cluster">
+            <div className="cluster-header">
+              <div>
+                <p className="cluster-label">Selected Market</p>
+                <h2>{selectedCompany ? `${selectedCompany.name} (${selectedCompany.symbol})` : "Loading market"}</h2>
+              </div>
+              <span>{marketReady ? "Instrument-specific order flow" : "Refreshing book"}</span>
             </div>
 
-            <form onSubmit={submitOrder}>
-              <div className="side-toggle" role="group" aria-label="Order side">
-                {["BUY", "SELL"].map(side => (
-                  <button
-                    type="button"
-                    key={side}
-                    className={form.side === side ? side.toLowerCase() : ""}
-                    onClick={() => setForm(current => ({ ...current, side }))}
-                  >
-                    {side}
-                  </button>
-                ))}
+            <div className="cluster-body">
+              <section className="panel order-ticket">
+              <div className="panel-heading">
+                <h2>Order Ticket</h2>
+                <span>Limit order</span>
               </div>
 
-              <label>
-                Company
-                <select value={selectedCompanyId ?? ""} onChange={handleCompanyChange}>
-                  {companies.map(company => (
-                    <option key={company.id} value={company.id}>
-                      {company.name} ({company.symbol})
-                    </option>
+              <form onSubmit={submitOrder}>
+                <div className="side-toggle" role="group" aria-label="Order side">
+                  {["BUY", "SELL"].map(side => (
+                    <button
+                      type="button"
+                      key={side}
+                      className={form.side === side ? side.toLowerCase() : ""}
+                      onClick={() => setForm(current => ({ ...current, side }))}
+                    >
+                      {side}
+                    </button>
                   ))}
-                </select>
-              </label>
+                </div>
 
-              <label>
-                Price
-                <input
-                  type="number"
-                  min="0.01"
-                  max="999.99"
-                  step="0.01"
-                  inputMode="decimal"
-                  placeholder="102.50"
-                  value={form.price}
-                  onChange={event => {
-                    const value = event.target.value;
-                    setForm(current => ({ ...current, price: value }));
-                    validatePrice(value);
-                  }}
-                />
-                {priceError && <span className="error-text">{priceError}</span>}
-              </label>
+                <label>
+                  Company
+                  <select value={selectedCompanyId ?? ""} onChange={handleCompanyChange}>
+                    {companies.map(company => (
+                      <option key={company.id} value={company.id}>
+                        {company.name} ({company.symbol})
+                      </option>
+                    ))}
+                  </select>
+                </label>
 
-              <label>
-                Quantity
-                <input
-                  type="number"
-                  min="1"
-                  max="1000000"
-                  step="1"
-                  inputMode="numeric"
-                  placeholder="150"
-                  value={form.quantity}
-                  onChange={event => {
-                    const value = event.target.value;
-                    setForm(current => ({ ...current, quantity: value }));
-                    validateQuantity(value);
-                  }}
-                />
-                {quantityError && <span className="error-text">{quantityError}</span>}
-              </label>
+                <label>
+                  Price
+                  <input
+                    type="number"
+                    min="0.01"
+                    max="999.99"
+                    step="0.01"
+                    inputMode="decimal"
+                    placeholder="102.50"
+                    value={form.price}
+                    onChange={event => {
+                      const value = event.target.value;
+                      setForm(current => ({ ...current, price: value }));
+                      validatePrice(value);
+                    }}
+                  />
+                  {priceError && <span className="error-text">{priceError}</span>}
+                </label>
 
-              {lastError && <p className="error-text">{lastError}</p>}
+                <label>
+                  Quantity
+                  <input
+                    type="number"
+                    min="1"
+                    max="1000000"
+                    step="1"
+                    inputMode="numeric"
+                    placeholder="150"
+                    value={form.quantity}
+                    onChange={event => {
+                      const value = event.target.value;
+                      setForm(current => ({ ...current, quantity: value }));
+                      validateQuantity(value);
+                    }}
+                  />
+                  {quantityError && <span className="error-text">{quantityError}</span>}
+                </label>
 
-              <button className={`submit-order ${form.side.toLowerCase()}`} type="submit">
-                Send {form.side} Order
-              </button>
-            </form>
-            </section>
+                {lastError && <p className="error-text">{lastError}</p>}
 
-            <div className="book-grid">
-              <OrderTable title="Buy Orders" side="BUY" rows={buyOrders} onCancel={cancelOrder} />
-              <OrderTable title="Sell Orders" side="SELL" rows={sellOrders} onCancel={cancelOrder} />
+                <button className={`submit-order ${form.side.toLowerCase()}`} type="submit">
+                  Send {form.side} Order
+                </button>
+              </form>
+              </section>
+
+              <div className="book-grid">
+                <OrderTable title="Buy Orders" side="BUY" rows={buyOrders} />
+                <OrderTable title="Sell Orders" side="SELL" rows={sellOrders} />
+              </div>
             </div>
-          </div>
-        </section>
+          </section>
 
-        <div className="sidebar">
-          <Wallet cash={cash} portfolio={portfolio} companies={companies} />
-          <TradeFeed trades={trades} companies={companies} />
+          <div className="sidebar">
+            <Wallet cash={cash} portfolio={portfolio} companies={companies} />
+            <TradeFeed trades={trades} companies={companies} />
+          </div>
         </div>
+        
+        <MyOrdersPanel orders={myOpenOrders} onCancel={cancelOrder} companies={companies} />
       </div>
     </main>
   );
