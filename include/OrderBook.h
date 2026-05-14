@@ -109,8 +109,8 @@ public:
 
         OrderNode& node = node_pool_[target_idx];
         
-        // Protection against ID wrap-around collisions and unauthorized cancellation
-        if (node.order.id != order_id || node.order.user_id != user_id) [[unlikely]] return false;
+        // Protection against ID wrap-around collisions, unauthorized cancellation, and wrong side
+        if (node.order.id != order_id || node.order.user_id != user_id || node.order.side != side) [[unlikely]] return false;
 
         OrderList& list = side ? bids_[price] : asks_[price];
 
