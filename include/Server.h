@@ -86,7 +86,7 @@ inline json trade_to_json(const Trade& t) {
     };
 }
 
-inline json depth_to_json(const std::vector<OrderBook::DepthLevel>& depth) {
+inline json depth_to_json(const std::vector<DepthLevel>& depth) {
     json levels = json::array();
     for (const auto& level : depth) {
         levels.push_back({{"price", level.price}, {"quantity", level.quantity}, {"orders", level.orders}});
@@ -94,7 +94,7 @@ inline json depth_to_json(const std::vector<OrderBook::DepthLevel>& depth) {
     return levels;
 }
 
-inline json orders_to_json(const std::vector<OrderBook::OrderSnapshot>& orders) {
+inline json orders_to_json(const std::vector<OrderSnapshot>& orders) {
     json rows = json::array();
     for (const auto& order : orders) {
         // user_id is passed down so UI can filter My Orders
@@ -118,10 +118,10 @@ inline json book_to_json(const InstrumentState& instrument) {
         {"company_name", instrument.company.name},
         {"company_symbol", instrument.company.symbol},
         {"total_shares", instrument.company.total_shares},
-        {"bids", depth_to_json(instrument.book.bid_depth())},
-        {"asks", depth_to_json(instrument.book.ask_depth())},
-        {"buy_orders", orders_to_json(instrument.book.bid_orders())},
-        {"sell_orders", orders_to_json(instrument.book.ask_orders())}
+        {"bids", depth_to_json(instrument.book->bid_depth())},
+        {"asks", depth_to_json(instrument.book->ask_depth())},
+        {"buy_orders", orders_to_json(instrument.book->bid_orders())},
+        {"sell_orders", orders_to_json(instrument.book->ask_orders())}
     };
 }
 
@@ -146,10 +146,34 @@ inline json snapshot_to_json(const InstrumentState& instrument, const json& hist
         {"total_shares", instrument.company.total_shares},
         {"companies", companies_to_json(companies)},
         {"trades", history.value("trades", json::array())},
-        {"bids", depth_to_json(instrument.book.bid_depth())},
-        {"asks", depth_to_json(instrument.book.ask_depth())},
-        {"buy_orders", orders_to_json(instrument.book.bid_orders())},
-        {"sell_orders", orders_to_json(instrument.book.ask_orders())}
+        {"bids", depth_to_json(instrument.book->bid_depth())},
+        {"asks", depth_to_json(instrument.book->ask_depth())},
+        {"buy_orders", orders_to_json(instrument.book->bid_orders())},
+        {"sell_orders", orders_to_json(instrument.book->ask_orders())}
+    };
+}
+
+inline json metrics_to_json(const EngineMetrics& metrics, const std::string& mode) {
+    std::vector<long long> sorted_latencies = metrics.latencies;
+    std::sort(sorted_latencies.begin(), sorted_latencies.end());
+
+    long long p50 = 0;
+    long long p99 = 0;
+    if (!sorted_latencies.empty()) {
+        p50 = metrics.get_latency_p50(); // Use helper from Metrics.h
+        p99 = metrics.get_latency_p99(); // Use helper from Metrics.h
+    }
+    
+    return {
+        {"type", "metrics_update"},
+        {"mode", mode},
+        {"orders_submitted", metrics.orders_submitted},
+        {"orders_matched", metrics.orders_matched},
+        {"latency_p50_us", p50},
+        {"latency_p99_us", p99},
+        {"throughput_ops", metrics.throughput_ops},
+        {"resting_orders", metrics.resting_orders},
+        {"total_market_value", metrics.total_market_value}
     };
 }
 
@@ -162,11 +186,11 @@ public:
     }
     json to_json() const {
         std::lock_guard<std::mutex> lock(mutex_);
-        json trades = json::array();
+        json trades_json = json::array(); // Renamed to avoid conflict with member `trades_`
         for (auto it = trades_.rbegin(); it != trades_.rend(); ++it) {
-            trades.push_back(trade_to_json(*it));
+            trades_json.push_back(trade_to_json(*it));
         }
-        return { {"type", "history"}, {"trades", trades} };
+        return { {"type", "history"}, {"trades", trades_json} };
     }
 private:
     static constexpr std::size_t max_trades_ = 100;
@@ -307,15 +331,26 @@ private:
 
             if (type == "register") { handle_register(msg); return; }
             if (type == "login")    { handle_login(msg); return; }
-            
-            if (type == "snapshot") { 
+
+            if (type == "snapshot") {
                 std::string token = msg.value("token", "");
                 if (!token.empty()) {
                     auto res = db_.validate_session(token);
                     if (res.ok) current_user_id_ = res.id;
                 }
-                request_snapshot(msg.value("company_id", default_company_id_)); 
-                return; 
+                request_snapshot(msg.value("company_id", default_company_id_));
+                return;
+            }
+
+            if (type == "set_engine_mode") {
+                std::string mode_str = msg.value("mode", "");
+                EngineMode new_mode = CURRENT;
+                if (mode_str == "legacy") {
+                    new_mode = LEGACY;
+                }
+                market_.set_engine_mode(new_mode);
+                send(json{ {"type", "engine_mode_set"}, {"mode", mode_str}, {"message", "Engine mode set successfully"} }.dump());
+                return;
             }
 
             if (type == "cancel") {
@@ -341,12 +376,12 @@ private:
                 const uint16_t company_id = msg.value("company_id", default_company_id_);
                 const bool side = (msg["side"] == "BUY");
                 const uint32_t price = msg["price"].get<uint32_t>();
-                
+
                 if (price >= 100000) {
                      send(json{{"type", "error"}, {"message", "Price exceeds maximum allowed ($999.99)."}} .dump());
                      return;
                 }
-                
+
                 std::string token = msg.value("token", "");
                 auto session_result = db_.validate_session(token);
                 if (!session_result.ok) {
@@ -376,14 +411,16 @@ private:
                 task.order.price = price;
                 task.order.quantity = msg["quantity"].get<uint32_t>();
                 task.order.timestamp = msg["timestamp"].get<uint64_t>();
-                
+
                 while (!engine_queue_.push(task)) std::this_thread::yield();
+                
+                // Send user update immediately after order placement to show reserved balance
+                send_user_update();
             }
         } catch (const std::exception& e) {
             std::cerr << "Message parse error: " << e.what() << "\n";
         }
     }
-
     websocket::stream<tcp::socket> ws_;
     beast::flat_buffer buffer_;
     std::vector<OutboundMsg> write_queue_;
@@ -422,19 +459,19 @@ public:
     };
 
     Server(net::io_context& ioc, unsigned short port, MarketState& market)
-        : acceptor_(ioc, tcp::endpoint(tcp::v4(), port)), market_(market), db_("exchange.db") {
-        
+        : acceptor_(ioc, tcp::endpoint(tcp::v4(), port)), market_(market), db_("exchange.db"), metrics_timer_(ioc) {
+
         for (const auto& company : market_.companies()) {
             InstrumentState* instrument = market_.find_instrument(company.id);
-            if (instrument) instrument->book.trade_listener = this;
+            if (instrument) instrument->book->set_trade_listener(this);
         }
 
         engine_thread_ = std::thread([this]() { run_engine_worker(); });
         db_worker_ = std::thread([this]() { run_db_worker(); });
-        
+
+        do_metrics_broadcast(); // Start periodic metrics broadcasting
         do_accept();
     }
-
     ~Server() {
         stop_worker_ = true;
         db_q_cv_.notify_all();
@@ -486,15 +523,14 @@ private:
                 if (!instrument) continue;
 
                 if (task.type == EngineTask::ORDER) {
-                    instrument->book.add_order(task.order);
+                    instrument->book->add_order(task.order);
                     registry_.broadcast(book_to_json(*instrument).dump());
-                } 
+                }
                 else if (task.type == EngineTask::CANCEL) {
-                    if (instrument->book.cancel_order(task.side, task.price, task.order_id, task.user_id)) {
+                    if (instrument->book->cancel_order(task.side, task.price, task.order_id, task.user_id)) {    
                         registry_.broadcast(book_to_json(*instrument).dump());
                     }
-                } 
-                else if (task.type == EngineTask::SNAPSHOT) {
+                }                else if (task.type == EngineTask::SNAPSHOT) {
                     json history = history_.to_json();
                     std::string msg = snapshot_to_json(*instrument, history, market_.companies()).dump();
                     if (task.session) task.session->send(msg);
@@ -535,6 +571,21 @@ private:
         }
     }
 
+    void do_metrics_broadcast() {
+        // Broadcast current engine metrics
+        registry_.broadcast(metrics_to_json(market_.get_current_metrics(), "current").dump());
+        // Broadcast legacy engine metrics
+        registry_.broadcast(metrics_to_json(market_.get_legacy_metrics(), "legacy").dump());
+
+        // Set up the timer for the next broadcast
+        metrics_timer_.expires_at(std::chrono::steady_clock::now() + metrics_period_);
+        metrics_timer_.async_wait([this](const beast::error_code& ec) {
+            if (!ec) {
+                do_metrics_broadcast();
+            }
+        });
+    }
+
     tcp::acceptor acceptor_;
     MarketState&  market_;
     Database      db_;
@@ -552,4 +603,7 @@ private:
     std::atomic<bool> stop_worker_{false};
     std::thread engine_thread_;
     std::thread db_worker_;
+
+    net::steady_timer metrics_timer_; // Timer for periodic metrics broadcast
+    std::chrono::milliseconds metrics_period_{500}; // Broadcast every 500ms
 };
