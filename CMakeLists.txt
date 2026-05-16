@@ -11,6 +11,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED True)
 
 option(FETCH_GTEST "Fetch GoogleTest from GitHub" ON)
 option(FETCH_JSON "Fetch nlohmann/json from GitHub" ON)
+option(FETCH_BENCHMARK "Fetch Google Benchmark from GitHub" ON)
 
 # ── Google Test ───────────────────────────
 if(FETCH_GTEST)
@@ -38,6 +39,20 @@ else()
     find_package(nlohmann_json REQUIRED)
 endif()
 
+# ── Google Benchmark ──────────────────────
+if(FETCH_BENCHMARK)
+    include(FetchContent)
+    FetchContent_Declare(
+      google_benchmark
+      URL https://github.com/google/benchmark/archive/refs/tags/v1.8.3.zip
+      DOWNLOAD_EXTRACT_TIMESTAMP true
+    )
+    set(BENCHMARK_ENABLE_TESTING OFF CACHE BOOL "Enable testing of the benchmark library" FORCE)
+    FetchContent_MakeAvailable(google_benchmark)
+else()
+    find_package(benchmark REQUIRED)
+endif()
+
 # ── Boost ─────────────────────────────────
 if(APPLE)
     # Appending instead of overwriting just in case
@@ -62,3 +77,8 @@ target_link_libraries(tests GTest::gtest_main)
 
 enable_testing()
 add_test(NAME OrderBookTests COMMAND tests)
+
+# ── Benchmark executable ───────────────────
+add_executable(exchange_benchmark benchmark/benchmark_orderbook.cpp)
+target_include_directories(exchange_benchmark PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_link_libraries(exchange_benchmark benchmark::benchmark nlohmann_json::nlohmann_json)
