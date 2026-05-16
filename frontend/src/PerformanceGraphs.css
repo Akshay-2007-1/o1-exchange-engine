@@ -1,0 +1,237 @@
+.performance-graphs-container {
+  padding: 20px;
+  background: var(--panel);
+  border-radius: 16px;
+  margin: 20px 0;
+  border: 1px solid var(--line);
+}
+
+.graphs-wrapper {
+  width: 100%;
+}
+
+.graphs-wrapper h3 {
+  color: var(--text);
+  margin-top: 0;
+  margin-bottom: 25px;
+  font-size: 22px;
+  text-align: center;
+  padding: 18px;
+  background: var(--panel-soft);
+  border-radius: 16px;
+  border: 1px solid var(--line);
+}
+
+.graphs-wrapper.current-mode h3 {
+  border-left: 4px solid #27ae60;
+  border-right: 4px solid #27ae60;
+}
+
+.graphs-wrapper.legacy-mode h3 {
+  border-left: 4px solid #e74c3c;
+  border-right: 4px solid #e74c3c;
+}
+
+.graph-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  margin-bottom: 20px;
+}
+
+.graph-card {
+  background: var(--panel-soft);
+  padding: 20px;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.graph-card:hover {
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  transform: translateY(-1px);
+}
+
+.graph-card h4 {
+  color: var(--text);
+  margin-top: 0;
+  margin-bottom: 15px;
+  font-size: 16px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.graphs-wrapper.current-mode .graph-card h4::before {
+  content: '';
+  width: 4px;
+  height: 16px;
+  background: #27ae60;
+  border-radius: 2px;
+}
+
+.graphs-wrapper.legacy-mode .graph-card h4::before {
+  content: '';
+  width: 4px;
+  height: 16px;
+  background: #e74c3c;
+  border-radius: 2px;
+}
+
+/* Custom Tooltip */
+.custom-tooltip {
+  background: rgba(15, 23, 42, 0.95);
+  padding: 14px;
+  border-radius: 12px;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.24);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  z-index: 1000;
+}
+
+.custom-tooltip p {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+.custom-tooltip .label {
+  color: var(--text);
+  font-weight: 600;
+  margin-bottom: 5px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  padding-bottom: 5px;
+}
+
+/* Empty State */
+.empty-state {
+  grid-column: 1 / -1;
+  background: var(--panel-soft);
+  padding: 60px 20px;
+  border-radius: 16px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 16px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.14);
+}
+
+/* Animations */
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.7;
+  }
+}
+
+.graphs-wrapper.current-mode .graph-card {
+  animation: none;
+  border-color: #25c18c;
+}
+
+.graphs-wrapper.legacy-mode .graph-card {
+  animation: none;
+  border-color: #ff6262;
+}
+
+/* Recharts Custom Styling */
+.recharts-surface {
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.05));
+}
+
+.recharts-tooltip-wrapper {
+  outline: none;
+}
+
+.recharts-default-tooltip {
+  background: transparent !important;
+  border: none !important;
+}
+
+.recharts-cartesian-axis-tick text {
+  font-size: 12px;
+  fill: #7f8c8d;
+}
+
+.recharts-cartesian-axis-line {
+  stroke: #e0e6ed;
+}
+
+.recharts-cartesian-grid-horizontal line,
+.recharts-cartesian-grid-vertical line {
+  stroke: #e0e6ed;
+  opacity: 0.5;
+}
+
+.recharts-legend-wrapper {
+  padding: 20px 0 0 0 !important;
+}
+
+.recharts-legend-item-text {
+  color: #2c3e50 !important;
+  font-size: 13px !important;
+  font-weight: 500 !important;
+}
+
+/* Responsive Design */
+@media (max-width: 1200px) {
+  .graph-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 768px) {
+  .performance-graphs-container {
+    padding: 15px;
+  }
+
+  .graph-card {
+    padding: 15px;
+  }
+
+  .graph-card h4 {
+    font-size: 14px;
+  }
+
+  .custom-tooltip {
+    padding: 10px;
+    font-size: 12px;
+  }
+}
+
+/* Loading State Animation */
+@keyframes shimmer {
+  0% {
+    background-position: -1000px 0;
+  }
+  100% {
+    background-position: 1000px 0;
+  }
+}
+
+.graph-card.loading {
+  background: linear-gradient(
+    90deg,
+    #f0f0f0 25%,
+    #e0e0e0 50%,
+    #f0f0f0 75%
+  );
+  background-size: 1000px 100%;
+  animation: shimmer 2s infinite;
+}
+
+/* Color Theming */
+.current-mode {
+  --primary-color: #27ae60;
+  --secondary-color: #229954;
+  --accent-color: rgba(39, 174, 96, 0.1);
+}
+
+.legacy-mode {
+  --primary-color: #e74c3c;
+  --secondary-color: #c0392b;
+  --accent-color: rgba(231, 76, 60, 0.1);
+}

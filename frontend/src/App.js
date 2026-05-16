@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
+import StressTest from "./StressTest";
 
 // const WS_URL = process.env.REACT_APP_WS_URL || "ws://20.205.25.160:9001";
 const WS_URL = "ws://localhost:9001";
@@ -839,6 +840,15 @@ export default function App() {
         
         <MyOrdersPanel orders={myOpenOrders} onCancel={cancelOrder} companies={companies} />
       </div>
+        <StressTest
+          ws={ws.current}
+          userSession={user}
+          onReset={() => {
+            setTrades([]);
+            setBuyOrders([]);
+            setSellOrders([]);
+          }}
+        />
     </main>
   );
 }
