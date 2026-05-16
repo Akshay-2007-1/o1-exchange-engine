@@ -276,7 +276,7 @@ private:
 
             CREATE TABLE IF NOT EXISTS balances (
                 user_id   INTEGER PRIMARY KEY,
-                cash      REAL NOT NULL DEFAULT 10000.0,
+                cash      REAL NOT NULL DEFAULT 1000000.0,
                 FOREIGN KEY (user_id) REFERENCES users(id)
             );
 
@@ -308,7 +308,7 @@ private:
         sqlite3_prepare_v2(db_, "BEGIN TRANSACTION;", -1, &stmt_begin_, nullptr);
         sqlite3_prepare_v2(db_, "COMMIT;", -1, &stmt_commit_, nullptr);
         sqlite3_prepare_v2(db_, "INSERT INTO users (username, password_hash, role, created_at) VALUES (?, ?, ?, ?);", -1, &stmt_create_user_, nullptr);
-        sqlite3_prepare_v2(db_, "INSERT INTO balances (user_id, cash) VALUES (?, 10000.0);", -1, &stmt_init_bal_, nullptr);
+        sqlite3_prepare_v2(db_, "INSERT INTO balances (user_id, cash) VALUES (?, 1000000.0);", -1, &stmt_init_bal_, nullptr);
         sqlite3_prepare_v2(db_, "SELECT id, password_hash FROM users WHERE username = ?;", -1, &stmt_login_, nullptr);
         sqlite3_prepare_v2(db_, "INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?);", -1, &stmt_create_sess_, nullptr);
         sqlite3_prepare_v2(db_, "SELECT user_id FROM sessions WHERE token = ? AND expires_at > ?;", -1, &stmt_val_sess_, nullptr);
