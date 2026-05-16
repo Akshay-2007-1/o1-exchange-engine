@@ -1,4 +1,5 @@
 build/
+node_modules/
 git config --global user.name “Shrey5132”
 .gitignore
 CMakeLists.txt
@@ -10,3 +11,4 @@ CMakeLists.txt
 .claude/settings.local.json
 .DS_Store
 GEMINI.md
+plan.md
