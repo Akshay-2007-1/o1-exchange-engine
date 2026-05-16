@@ -5,6 +5,9 @@
 #include <string>
 #include <vector>
 #include <algorithm>
+#include <chrono> // For high-resolution clock
+#include "IOrderBook.h"
+#include "Metrics.h" // Include the new metrics header
 
 constexpr uint32_t MAX_PRICE = 100000;                     
 constexpr uint32_t BITMAP_L1_SIZE = (MAX_PRICE / 64) + 1;  
@@ -57,28 +60,15 @@ struct OrderList {
     uint32_t order_count = 0;
 };
 
-class OrderBook {
+class OrderBook : public IOrderBook {
 public:
-    struct DepthLevel {
-        uint32_t price;
-        uint32_t quantity;
-        uint32_t orders;
-    };
-
-    struct OrderSnapshot {
-        uint64_t id;
-        int64_t  user_id; // Added to filter for "My Open Orders"
-        uint64_t timestamp;
-        uint32_t price;
-        uint32_t quantity;
-    };
-
     ITradeListener* trade_listener = nullptr;
+    EngineMetrics* metrics_ = nullptr; // Initialize in constructor
 
     OrderBook() {
         node_pool_.resize(MAX_ORDERS);
         free_indices_.reserve(MAX_ORDERS);
-        
+
         for (uint32_t i = 0; i < MAX_ORDERS; ++i) {
             free_indices_.push_back(MAX_ORDERS - 1 - i); 
         }
@@ -86,8 +76,20 @@ public:
         order_map_array_.resize(MAX_ORDERS, NULL_IDX);
     }
 
-    void add_order(const Order& order_ref) {
+    void set_metrics(EngineMetrics* metrics) override {
+        metrics_ = metrics;
+    }
+
+    EngineMetrics* get_metrics() const override {
+        return metrics_;
+    }
+
+    void add_order(const Order& order_ref) override {
         if (order_ref.price >= MAX_PRICE) [[unlikely]] return; 
+
+        if (metrics_) {
+            metrics_->orders_submitted++;
+        }
 
         Order order = order_ref;
 
@@ -99,8 +101,7 @@ public:
             if (order.quantity > 0) insert_to_book(false, order);
         }
     }
-
-    bool cancel_order(bool side, uint32_t price, uint64_t order_id, int64_t user_id) {
+    bool cancel_order(bool side, uint32_t price, uint64_t order_id, int64_t user_id) override {
         uint32_t target_idx = order_map_array_[order_id % MAX_ORDERS];
         if (target_idx == NULL_IDX) return false;
 
@@ -129,7 +130,7 @@ public:
         return true;
     }
 
-    std::vector<DepthLevel> bid_depth(std::size_t limit = 20) const {
+    std::vector<DepthLevel> bid_depth(std::size_t limit = 20) const override {
         std::vector<DepthLevel> depth;
         uint64_t l3_copy = bids_l3_;
         
@@ -155,7 +156,7 @@ public:
         return depth;
     }
 
-    std::vector<DepthLevel> ask_depth(std::size_t limit = 20) const {
+    std::vector<DepthLevel> ask_depth(std::size_t limit = 20) const override {
         std::vector<DepthLevel> depth;
         uint64_t l3_copy = asks_l3_;
         
@@ -181,7 +182,7 @@ public:
         return depth;
     }
 
-    std::vector<OrderSnapshot> bid_orders(std::size_t limit = 100) const {
+    std::vector<OrderSnapshot> bid_orders(std::size_t limit = 100) const override {
         std::vector<OrderSnapshot> snaps;
         auto depth = bid_depth(limit); 
         for (const auto& level : depth) {
@@ -196,7 +197,7 @@ public:
         return snaps;
     }
 
-    std::vector<OrderSnapshot> ask_orders(std::size_t limit = 100) const {
+    std::vector<OrderSnapshot> ask_orders(std::size_t limit = 100) const override {
         std::vector<OrderSnapshot> snaps;
         auto depth = ask_depth(limit);
         for (const auto& level : depth) {
@@ -209,6 +210,14 @@ public:
             if (snaps.size() == limit) break;
         }
         return snaps;
+    }
+
+    ITradeListener* get_trade_listener() override {
+        return trade_listener;
+    }
+
+    void set_trade_listener(ITradeListener* listener) override {
+        trade_listener = listener;
     }
 
 private:
@@ -354,6 +363,16 @@ private:
             trade.sell_order_id  = !incoming.side ? incoming.id : resting.id;
             trade.buyer_user_id  = incoming.side ? incoming.user_id : resting.user_id;
             trade.seller_user_id = !incoming.side ? incoming.user_id : resting.user_id;
+
+            // Update metrics if available
+            if (metrics_) {
+                metrics_->orders_matched++;
+                // Client-to-engine latency for the incoming order
+                auto client_timestamp = std::chrono::time_point<std::chrono::steady_clock>(std::chrono::milliseconds(incoming.timestamp));
+                auto current_time = std::chrono::steady_clock::now();
+                auto latency_us = std::chrono::duration_cast<std::chrono::microseconds>(current_time - client_timestamp).count();
+                metrics_->add_latency(latency_us);
+            }
 
             incoming.quantity    -= fill_qty;
             resting.quantity     -= fill_qty;
