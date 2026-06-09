@@ -1,6 +1,5 @@
 #pragma once
 
-#include <boost/asio/io_context.hpp>
 #include <boost/beast/core.hpp>
 #include <boost/beast/websocket.hpp>
 #include <boost/asio/ip/tcp.hpp>
@@ -16,6 +15,8 @@
 #include <deque>
 #include <atomic>
 #include <condition_variable>
+#include "Market.h"
+#include "Database.h"
 
 namespace beast     = boost::beast;
 namespace websocket = beast::websocket;

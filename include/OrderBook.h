@@ -6,53 +6,47 @@
 #include <vector>
 #include <algorithm>
 
-constexpr uint32_t MAX_PRICE = 100000;
-constexpr uint32_t BITMAP_L1_SIZE = (MAX_PRICE / 64) + 1;
-constexpr uint32_t BITMAP_L2_SIZE = (BITMAP_L1_SIZE / 64) + 1;
-constexpr uint32_t MAX_ORDERS = 100000;
-constexpr uint32_t NULL_IDX = -1;
+constexpr uint32_t MAX_PRICE = 100000;                     
+constexpr uint32_t BITMAP_L1_SIZE = (MAX_PRICE / 64) + 1;  
+constexpr uint32_t BITMAP_L2_SIZE = (BITMAP_L1_SIZE / 64) + 1; 
+constexpr uint32_t MAX_ORDERS = 100000;                   
+constexpr uint32_t NULL_IDX = -1;                          
 
 #pragma pack(push, 1)
 struct Order {
     uint64_t id;         // 8 bytes
+    int64_t  user_id;    // 8 bytes - Embedded to remove external hash map
     uint64_t timestamp;  // 8 bytes
-    uint32_t user_id;    // 4 bytes
     uint32_t price;      // 4 bytes
     uint32_t quantity;   // 4 bytes
     uint16_t company_id; // 2 bytes
     bool     side;       // 1 byte (true for BUY, false for SELL)
-    uint8_t  padding[1]; // 1 bytes padding -> Total 32 bytes
+    uint8_t  padding[5]; // 5 bytes padding -> Total 40 bytes
 };
-#pragma pack(pop)
 
-#pragma pack(push, 1)
 struct OrderNode {
-    Order order;         // 32 bytes
+    Order order;         // 40 bytes
     uint32_t prev_idx;   // 4 bytes
     uint32_t next_idx;   // 4 bytes
-    uint8_t  padding[24];// 24 bytes padding -> Total 64 bytes
+    uint8_t  padding[16];// 16 bytes padding -> Total 64 bytes
 };
-#pragma pack(pop)
-static_assert(sizeof(OrderNode) == 64, "OrderNode must be exactly 64 bytes");
 
 #pragma pack(push, 1)
 struct Trade {
     uint64_t buy_order_id;      // 8 bytes
     uint64_t sell_order_id;     // 8 bytes
-
-    uint32_t buyer_user_id;     // 4 bytes
-    uint32_t seller_user_id;    // 4 bytes
-
+    int64_t  buyer_user_id;     // 8 bytes
+    int64_t  seller_user_id;    // 8 bytes
     uint32_t price;             // 4 bytes
     uint32_t quantity;          // 4 bytes
-
     uint32_t buyer_limit_price; // 4 bytes
-    uint32_t seller_limit_price;// 4 bytes
-
     uint16_t company_id;        // 2 bytes
-    uint8_t  padding[6];        // 6 bytes padding -> Total 48 bytes
+    uint8_t  padding[2];        // 2 bytes padding -> Total 48 bytes
 };
 #pragma pack(pop)
+#pragma pack(pop)
+
+static_assert(sizeof(OrderNode) == 64, "OrderNode must be exactly 64 bytes to prevent false sharing and cache straddling");
 static_assert(sizeof(Trade) == 48, "Trade must be exactly 48 bytes");
 
 class ITradeListener {
@@ -70,30 +64,29 @@ struct OrderList {
 
 class OrderBook {
 public:
-    #pragma pack(push, 1)
+#pragma pack(push, 1)
     struct DepthLevel {
-        uint32_t price;         // 4 bytes
-        uint32_t quantity;      // 4 bytes
-        uint32_t orders;        // 4 bytes
-        uint8_t  padding[4];    // 4 bytes padding -> Total 16 bytes
+        uint32_t price;
+        uint32_t quantity;
+        uint32_t orders;
+        uint32_t padding;
     };
-    #pragma pack(pop)
+#pragma pack(pop)
     static_assert(sizeof(DepthLevel) == 16, "DepthLevel must be exactly 16 bytes");
 
-    #pragma pack(push, 1)
+#pragma pack(push, 1)
     struct OrderSnapshot {
-        uint64_t id;            // 8 bytes
-        uint64_t timestamp;     // 8 bytes
-        uint32_t user_id;       // 4 bytes
-        uint32_t price;         // 4 bytes
-        uint32_t quantity;      // 4 bytes
-        uint8_t  padding[4];    // 4 bytes padding -> Total 32 bytes
+        uint64_t id;
+        int64_t  user_id; // Added to filter for "My Open Orders"
+        uint64_t timestamp;
+        uint32_t price;
+        uint32_t quantity;
     };
 #pragma pack(pop)
     static_assert(sizeof(OrderSnapshot) == 32, "OrderSnapshot must be exactly 32 bytes");
 
     ITradeListener* trade_listener = nullptr;
-    uint64_t order_id_counter = 0;
+    uint64_t next_order_id_counter_ = 1;
 
     OrderBook() {
         node_pool_.resize(MAX_ORDERS);
@@ -118,7 +111,7 @@ public:
         uint32_t pool_idx = free_indices_.back();
         free_indices_.pop_back();
 
-        order.id = ((++order_id_counter_) << 32) | pool_idx;
+        order.id = (next_order_id_counter_++ << 32) | pool_idx;
 
         rejected_qty = 0;
         if (order.side) { 
@@ -392,6 +385,8 @@ private:
             trade.buyer_user_id     = incoming.side ? incoming.user_id : resting.user_id;
             trade.seller_user_id    = !incoming.side ? incoming.user_id : resting.user_id;
             trade.buyer_limit_price = incoming.side ? incoming.price : resting.price;
+            trade.padding[0]        = 0;
+            trade.padding[1]        = 0;
 
             incoming.quantity    -= fill_qty;
             resting.quantity     -= fill_qty;
