@@ -569,6 +569,7 @@ option {
 .trade-list {
   flex: 1;
   height: 0; /* THE MAGIC FIX: forces intrinsic height to 0 so it stops expanding the page */
+  max-height: 340px;
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;

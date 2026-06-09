@@ -510,14 +510,6 @@ This isolation is intentional. If a bug appears in the server or frontend, the e
 
 ## 12. Known limitations and future work
 
-### Floating point prices
-
-`std::map<double>` uses floating point equality for key comparison. This is technically unsafe — `102.10` represented as a double may not equal `102.10` submitted from JavaScript. For production use, prices should be stored as integers (e.g. price in cents or ticks). For Orbital scope this is acceptable.
-
-### In-memory only
-
-The order book resets on container restart. Adding SQLite persistence — writing every order to disk on arrival, replaying on startup — would make the system survive restarts. Estimated effort: one day.
-
 ### Single on_trade callback
 
 `OrderBook::on_trade` is a single `std::function`. Assigning it in a new session overwrites the previous assignment. For correctness with multiple clients, this should be refactored to a `vector<std::function>` or the callback should be set once at startup (which is what the current server constructor does). Worth fixing before Splashdown.
@@ -526,9 +518,7 @@ The order book resets on container restart. Adding SQLite persistence — writin
 
 Cancelled orders are removed from the in-memory book but not logged. A trade history exists but a cancel history does not. Adding cancel logging would be straightforward.
 
-### No authentication
 
-Any WebSocket client can submit orders as any user. For a real exchange this is obviously unacceptable. Login auth is an important TO-DO.
 
 ### Multi-instrument extension
 

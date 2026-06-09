@@ -1,0 +1,4 @@
+Database opened: exchange.db
+Database opened: exchange.db
+WebSocket server listening on port 9001...
+Message parse error: [json.exception.type_error.302] type must be string, but is null

@@ -1,0 +1,981 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="NUS Orbital Milestone 1 Poster for O(1) Exchange - A high-performance C++ matching engine and real-time dashboard.">
+  <title>O(1) Exchange — Orbital Milestone 1 Poster (Aligned)</title>
+  
+  <!-- Modern Typography -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+  
+  <style>
+    /* --- CSS Variables & Design System --- */
+    :root {
+      --bg: #070913;
+      --card-bg: rgba(13, 17, 30, 0.7);
+      --card-border: rgba(255, 255, 255, 0.06);
+      --card-hover-border: rgba(0, 242, 254, 0.3);
+      --primary: #00f2fe;
+      --primary-rgb: 0, 242, 254;
+      --secondary: #9d4edd;
+      --secondary-rgb: 157, 78, 221;
+      --accent: #3a0ca3;
+      --success: #10b981;
+      --success-rgb: 16, 185, 129;
+      --danger: #ef4444;
+      --danger-rgb: 239, 68, 68;
+      --warning: #f59e0b;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+      --font-title: 'Outfit', sans-serif;
+      --font-body: 'Inter', sans-serif;
+      --font-mono: 'Fira Code', monospace;
+      --shadow-glow: 0 0 20px rgba(0, 242, 254, 0.15);
+      --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    /* --- Base Resets --- */
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      font-family: var(--font-body);
+      line-height: 1.6;
+      overflow-x: hidden;
+      background-image: 
+        radial-gradient(circle at 10% 20%, rgba(157, 78, 221, 0.05) 0%, transparent 40%),
+        radial-gradient(circle at 90% 80%, rgba(0, 242, 254, 0.05) 0%, transparent 40%),
+        linear-gradient(rgba(255, 255, 255, 0.005) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, 0.005) 1px, transparent 1px);
+      background-size: 100% 100%, 100% 100%, 40px 40px, 40px 40px;
+      padding: 2rem;
+    }
+
+    /* --- Container & Layout --- */
+    .container {
+      max-width: 1600px;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      gap: 2rem;
+    }
+
+    /* --- Poster Header --- */
+    header {
+      position: relative;
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 16px;
+      padding: 2.5rem;
+      backdrop-filter: blur(12px);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 2rem;
+      box-shadow: var(--shadow-glow);
+      overflow: hidden;
+    }
+
+    header::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 4px;
+      background: linear-gradient(90deg, var(--primary), var(--secondary));
+    }
+
+    .header-left {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+
+    .header-badge {
+      align-self: flex-start;
+      background: rgba(0, 242, 254, 0.1);
+      border: 1px solid rgba(0, 242, 254, 0.3);
+      color: var(--primary);
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.15em;
+      padding: 0.35rem 0.85rem;
+      border-radius: 20px;
+      box-shadow: 0 0 10px rgba(0, 242, 254, 0.1);
+    }
+
+    h1 {
+      font-family: var(--font-title);
+      font-size: 2.75rem;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      background: linear-gradient(135deg, #ffffff 30%, #a5b4fc 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .tagline {
+      color: var(--text-muted);
+      font-size: 1.15rem;
+      font-weight: 400;
+    }
+
+    .header-right {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 0.4rem;
+      text-align: right;
+    }
+
+    .team-title {
+      font-family: var(--font-title);
+      font-size: 0.85rem;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--secondary);
+      font-weight: 700;
+    }
+
+    .team-member {
+      font-size: 1.1rem;
+      font-weight: 600;
+      color: var(--text);
+    }
+
+    .team-sub {
+      font-size: 0.85rem;
+      color: var(--text-muted);
+    }
+
+    /* --- Responsive Grid --- */
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1.2fr 1fr;
+      gap: 2rem;
+      align-items: stretch;
+    }
+
+    @media (max-width: 1250px) {
+      .grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    /* --- Columns & Cards --- */
+    .column {
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      gap: 2rem;
+    }
+
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 16px;
+      padding: 1.8rem;
+      backdrop-filter: blur(12px);
+      transition: var(--transition);
+      display: flex;
+      flex-direction: column;
+      gap: 1.2rem;
+      position: relative;
+    }
+
+    .card:hover {
+      border-color: var(--card-hover-border);
+      box-shadow: 0 10px 30px rgba(0, 242, 254, 0.03);
+      transform: translateY(-2px);
+    }
+
+    .card-title {
+      font-family: var(--font-title);
+      font-size: 1.35rem;
+      font-weight: 700;
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+      padding-bottom: 0.75rem;
+    }
+
+    .card-title-icon {
+      color: var(--primary);
+      font-size: 1.5rem;
+    }
+
+    /* --- Content Typography --- */
+    p {
+      color: var(--text-muted);
+      font-size: 0.925rem;
+      line-height: 1.6;
+    }
+
+    strong {
+      color: var(--text);
+      font-weight: 600;
+    }
+
+    ul {
+      list-style-type: none;
+      display: flex;
+      flex-direction: column;
+      gap: 0.6rem;
+    }
+
+    li {
+      font-size: 0.9rem;
+      color: var(--text-muted);
+      position: relative;
+      padding-left: 1.25rem;
+    }
+
+    li::before {
+      content: "•";
+      position: absolute;
+      left: 0;
+      color: var(--primary);
+      font-weight: bold;
+    }
+
+    /* --- Architecture Flowchart --- */
+    .arch-flow {
+      display: flex;
+      flex-direction: column;
+      gap: 0.8rem;
+      padding: 0.5rem 0;
+    }
+
+    .arch-node {
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: 8px;
+      padding: 0.75rem;
+      text-align: center;
+      font-size: 0.85rem;
+      font-weight: 600;
+      transition: var(--transition);
+      position: relative;
+    }
+
+    .arch-node.frontend {
+      border-color: rgba(157, 78, 221, 0.4);
+      background: rgba(157, 78, 221, 0.03);
+    }
+    .arch-node.network {
+      border-color: rgba(0, 242, 254, 0.4);
+      background: rgba(0, 242, 254, 0.03);
+    }
+    .arch-node.engine {
+      border-color: rgba(16, 185, 129, 0.4);
+      background: rgba(16, 185, 129, 0.03);
+    }
+
+    .arch-arrow {
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 0.8rem;
+      font-family: var(--font-mono);
+      margin: -0.2rem 0;
+    }
+
+    /* --- C++ Hardware Optimization Feature --- */
+    .cpp-tag-container {
+      display: flex;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+    }
+
+    .cpp-tag {
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 6px;
+      padding: 0.25rem 0.5rem;
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      color: var(--primary);
+    }
+
+    /* --- Visual Order Book --- */
+    .book-visualizer {
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      background: rgba(0, 0, 0, 0.2);
+      border-radius: 12px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .book-header {
+      background: rgba(255, 255, 255, 0.02);
+      padding: 0.5rem 1rem;
+      font-size: 0.75rem;
+      font-weight: 700;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      display: grid;
+      grid-template-columns: 1fr 1.2fr 1.2fr 0.5fr;
+      text-align: right;
+    }
+
+    .book-header div:first-child { text-align: left; }
+
+    .book-list {
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .book-row {
+      padding: 0.45rem 1rem;
+      font-family: var(--font-mono);
+      font-size: 0.8rem;
+      display: grid;
+      grid-template-columns: 1fr 1.2fr 1.2fr 0.5fr;
+      text-align: right;
+      align-items: center;
+      position: relative;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.02);
+    }
+
+    .book-row span:first-of-type { text-align: left; }
+
+    .row-bg {
+      position: absolute;
+      grid-column: 1 / -1;
+      grid-row: 1 / -1;
+      top: 0;
+      bottom: 0;
+      right: 0;
+      z-index: 0;
+      opacity: 0.12;
+      transition: var(--transition);
+    }
+
+    .book-row span, .book-row div {
+      position: relative;
+      z-index: 1;
+    }
+
+    .row-buy { color: var(--success); }
+    .row-sell { color: var(--danger); }
+    
+    .spread-bar {
+      background: rgba(255, 255, 255, 0.015);
+      border-top: 1px solid rgba(255, 255, 255, 0.03);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+      padding: 0.35rem 1rem;
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      text-align: center;
+      font-weight: 600;
+    }
+
+    /* --- Interactive User Wallet State --- */
+    .wallet-section {
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid rgba(255, 255, 255, 0.04);
+      border-radius: 12px;
+      padding: 1rem;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+    }
+
+    .wallet-card {
+      display: flex;
+      flex-direction: column;
+      gap: 0.3rem;
+    }
+
+    .wallet-user {
+      font-size: 0.8rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      color: var(--primary);
+    }
+
+    .wallet-cash {
+      font-family: var(--font-mono);
+      font-size: 1.15rem;
+      font-weight: 700;
+      color: #fff;
+    }
+
+    .wallet-portfolio {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      font-family: var(--font-mono);
+    }
+
+    /* --- Live Trade Feed --- */
+    .trade-tape {
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      background: rgba(0, 0, 0, 0.25);
+      border-radius: 12px;
+      overflow: hidden;
+      padding: 0.5rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.4rem;
+    }
+
+    .trade-item {
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      padding: 0.35rem 0.5rem;
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.01);
+      display: flex;
+      justify-content: space-between;
+      animation: slideIn 0.25s cubic-bezier(0, 0, 0.2, 1);
+    }
+
+    @keyframes slideIn {
+      from { transform: translateY(10px); opacity: 0; }
+      to { transform: translateY(0); opacity: 1; }
+    }
+
+    /* --- Hardened Engineering / Issue Cards --- */
+    .issue-grid {
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      gap: 1rem;
+      flex-grow: 1;
+    }
+
+    .issue-card {
+      background: rgba(255, 255, 255, 0.015);
+      border: 1px solid rgba(255, 255, 255, 0.04);
+      border-radius: 12px;
+      padding: 1rem;
+      transition: var(--transition);
+      cursor: pointer;
+    }
+
+    .issue-card:hover {
+      background: rgba(255, 255, 255, 0.03);
+      border-color: rgba(239, 68, 68, 0.2);
+    }
+
+    .issue-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 0.4rem;
+    }
+
+    .issue-title {
+      font-family: var(--font-title);
+      font-size: 0.95rem;
+      font-weight: 700;
+      color: #fff;
+    }
+
+    .issue-badge {
+      font-size: 0.65rem;
+      font-weight: 700;
+      padding: 0.2rem 0.5rem;
+      border-radius: 4px;
+      text-transform: uppercase;
+    }
+
+    .badge-critical {
+      background: rgba(239, 68, 68, 0.15);
+      color: var(--danger);
+      border: 1px solid rgba(239, 68, 68, 0.3);
+    }
+
+    .badge-high {
+      background: rgba(245, 158, 11, 0.15);
+      color: var(--warning);
+      border: 1px solid rgba(245, 158, 11, 0.3);
+    }
+
+    .issue-desc {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      margin-bottom: 0.5rem;
+    }
+
+    .issue-fix {
+      font-size: 0.8rem;
+      color: var(--success);
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      background: rgba(16, 185, 129, 0.05);
+      padding: 0.4rem 0.6rem;
+      border-radius: 6px;
+      border-left: 3px solid var(--success);
+    }
+
+    /* --- Visual Timeline/Roadmap --- */
+    .timeline {
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      gap: 1rem;
+      padding-top: 0.5rem;
+      flex-grow: 1;
+    }
+
+    .timeline-item {
+      display: flex;
+      gap: 1rem;
+      align-items: flex-start;
+      position: relative;
+    }
+
+    .timeline-item:not(:last-child)::after {
+      content: '';
+      position: absolute;
+      left: 14px;
+      top: 28px;
+      bottom: -16px;
+      width: 2px;
+      background: rgba(255, 255, 255, 0.05);
+    }
+
+    .timeline-marker {
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      background: var(--bg);
+      border: 2px solid var(--primary);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      font-size: 0.7rem;
+      font-weight: 700;
+      color: var(--primary);
+      flex-shrink: 0;
+      z-index: 1;
+    }
+
+    .timeline-marker.active {
+      border-color: var(--secondary);
+      color: var(--secondary);
+      box-shadow: 0 0 10px rgba(157, 78, 221, 0.3);
+    }
+
+    .timeline-marker.done {
+      border-color: var(--success);
+      color: var(--success);
+    }
+
+    .timeline-content {
+      display: flex;
+      flex-direction: column;
+      gap: 0.2rem;
+    }
+
+    .timeline-period {
+      font-family: var(--font-mono);
+      font-size: 0.7rem;
+      color: var(--primary);
+      text-transform: uppercase;
+      font-weight: 600;
+    }
+
+    .timeline-heading {
+      font-family: var(--font-title);
+      font-size: 0.95rem;
+      font-weight: 700;
+      color: #fff;
+    }
+
+    .timeline-body {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+    }
+
+    /* --- Footer --- */
+    footer {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 16px;
+      padding: 1.5rem;
+      text-align: center;
+      font-size: 0.85rem;
+      color: var(--text-muted);
+      backdrop-filter: blur(12px);
+    }
+
+    footer span {
+      color: var(--primary);
+      font-weight: 600;
+    }
+
+    /* --- Custom Scrollbar --- */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: rgba(0, 0, 0, 0.1);
+    }
+    ::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 3px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: rgba(255, 255, 255, 0.2);
+    }
+
+    /* --- Print & High-Resolution Export Styles --- */
+    @media print {
+      body {
+        background-color: #070913 !important;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+        padding: 1.5rem !important;
+      }
+      header, .card {
+        background: #0d111e !important;
+        border: 1px solid rgba(255, 255, 255, 0.1) !important;
+        box-shadow: none !important;
+      }
+      .grid {
+        grid-template-columns: 1fr 1.2fr 1fr !important;
+        gap: 1.5rem !important;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+    
+    <!-- --- POSTER HEADER --- -->
+    <header id="poster-header">
+      <div class="header-left">
+        <div class="header-badge">NUS Orbital 2026 — Apollo Level</div>
+        <h1>O(1) Exchange — Milestone 1</h1>
+        <p class="tagline">Ultra-Low Latency In-Memory Matching Engine & Live Trading Interface</p>
+      </div>
+      <div class="header-right">
+        <div class="team-title">Developed By</div>
+        <div class="team-member">Shrey Jain & Akshay</div>
+        <div class="team-sub">Apollo Candidates</div>
+        <div class="team-sub" style="font-family: var(--font-mono); margin-top: 0.3rem;">NUS Computing</div>
+      </div>
+    </header>
+
+    <!-- --- MAIN THREE COLUMN GRID --- -->
+    <div class="grid">
+      
+      <!-- === COLUMN 1: PROJECT CONCEPT & ARCHITECTURE === -->
+      <div class="column">
+        
+        <!-- PROJECT CONCEPT -->
+        <section class="card" id="project-concept">
+          <h2 class="card-title">
+            <span class="card-title-icon">⚡</span>
+            The Vision & Core Idea
+          </h2>
+          <p>
+            Standard financial platforms are bottlenecked by disk-bound databases, introducing microsecond latencies that are fatal to high-frequency trades. 
+          </p>
+          <p>
+            <strong>O(1) Exchange</strong> is a specialized, <strong>hardware-optimized order book</strong> engineered entirely in C++. By storing trade states in lock-free RAM blocks and using L3 cache alignment, matching operations execute in pure <strong>sub-millisecond intervals</strong>. Trade feeds are then streamed instantly via WebSocket to a dynamic React dashboard.
+          </p>
+          <div class="cpp-tag-container">
+            <span class="cpp-tag">C++20</span>
+            <span class="cpp-tag">Boost.Beast</span>
+            <span class="cpp-tag">React</span>
+            <span class="cpp-tag">SQLite</span>
+            <span class="cpp-tag">L3-Optimized</span>
+          </div>
+        </section>
+
+        <!-- SYSTEM ARCHITECTURE -->
+        <section class="card" id="system-architecture">
+          <h2 class="card-title">
+            <span class="card-title-icon">⚙️</span>
+            System Architecture
+          </h2>
+          <p>
+            The system isolates trading instruments to prevent concurrent resource blocking, creating a truly scalable multi-asset market.
+          </p>
+          
+          <div class="arch-flow">
+            <div class="arch-node frontend" id="node-react">
+              React Trading UI
+              <div style="font-size: 0.65rem; color: var(--text-muted); font-weight: normal;">WebSocket Client | State Rendering</div>
+            </div>
+            <div class="arch-arrow">│ ws://host:9001 (JSON messages)</div>
+            <div class="arch-node network" id="node-server">
+              Boost.Beast WebSocket Server
+              <div style="font-size: 0.65rem; color: var(--text-muted); font-weight: normal;">Multi-Client | Detached Thread Worker Pool</div>
+            </div>
+            <div class="arch-arrow">│ Synchronized In-Memory Dispatch</div>
+            <div class="arch-node engine" id="node-engine">
+              O(1) In-Memory Matching Engine
+              <div style="font-size: 0.65rem; color: var(--text-muted); font-weight: normal;">Per-Instrument Book Mutex | 3-Level Bitmaps</div>
+            </div>
+            <div class="arch-arrow">│ SQLite Atomic Ledger Updates</div>
+            <div class="arch-node engine" style="border-color: rgba(16, 185, 129, 0.8); background: rgba(16, 185, 129, 0.08);" id="node-db">
+              SQLite Account Registry & Security
+              <div style="font-size: 0.65rem; color: var(--text-muted); font-weight: normal;">libsodium Argon2id | Transaction Batching</div>
+            </div>
+          </div>
+
+          <p style="font-size: 0.85rem;">
+            <strong>Bitmapped Fast Paths:</strong> Uses 3-level bit arrays (`bids_l1_`, `bids_l2_`, `bids_l3_`) for empty-level checks. Employs hardware-level intrinsics (`__builtin_clzll` and `__builtin_ctzll`) to locate the best bid or ask in absolute <strong>O(1) time</strong>, avoiding expensive map iterations.
+          </p>
+        </section>
+
+      </div>
+
+      <!-- === COLUMN 2: CORE ENGINE LEDGER & ROADMAP === -->
+      <div class="column">
+        
+        <!-- VISUAL ENGINE LEDGER DASHBOARD -->
+        <section class="card" id="ledger-dashboard" style="border-color: rgba(0, 242, 254, 0.25); box-shadow: var(--shadow-glow);">
+          <h2 class="card-title" style="color: var(--primary);">
+            <span class="card-title-icon" style="color: var(--primary);">📊</span>
+            Core Engine Ledger (Proof of Concept)
+          </h2>
+          <p style="font-size: 0.85rem;">
+            A high-fidelity visual representation of the real-time account ledger state, limit order book depth, and trade execution tape generated by our integrated matching engine.
+          </p>
+
+          <div class="sandbox-panel">
+            
+            <!-- Ledgers Header Label -->
+            <label style="margin-bottom: 0.2rem; display: block; font-size: 0.75rem;">Account Registry Ledgers</label>
+            
+            <!-- Wallets Display -->
+            <div class="wallet-section">
+              <div class="wallet-card">
+                <div class="wallet-user">Shrey (Buyer)</div>
+                <div class="wallet-cash">$16,450.00</div>
+                <div class="wallet-portfolio">APL Available: 500 | Escrow Reserved: $33,550.00</div>
+              </div>
+              <div class="wallet-card">
+                <div class="wallet-user" style="color: var(--secondary);">Akshay (Seller)</div>
+                <div class="wallet-cash">$20,000.00</div>
+                <div class="wallet-portfolio">APL Available: 50 | Escrow Reserved: 450 shares</div>
+              </div>
+            </div>
+
+            <!-- Depth Ladder -->
+            <div>
+              <label style="margin-bottom: 0.4rem; display: block; font-size: 0.75rem;">In-Memory Order Book Depth (APL)</label>
+              <div class="book-visualizer">
+                <div class="book-header">
+                  <div>Side</div>
+                  <div>Price</div>
+                  <div>Quantity</div>
+                  <div>Count</div>
+                </div>
+                <!-- Asks (Sells) -->
+                <div class="book-list" style="flex-direction: column-reverse; overflow: hidden; border-bottom: 1px dashed rgba(255,255,255,0.05);">
+                  <div class="book-row">
+                    <span class="row-sell">SELL</span>
+                    <span>$105</span>
+                    <span>300</span>
+                    <span>1</span>
+                    <div class="row-bg" style="width: 100%; background: var(--danger); left: 0; right: auto;"></div>
+                  </div>
+                  <div class="book-row">
+                    <span class="row-sell">SELL</span>
+                    <span>$102</span>
+                    <span>150</span>
+                    <span>1</span>
+                    <div class="row-bg" style="width: 50%; background: var(--danger); left: 0; right: auto;"></div>
+                  </div>
+                </div>
+                <!-- Spread -->
+                <div class="spread-bar">Spread: $4.00</div>
+                <!-- Bids (Buys) -->
+                <div class="book-list" style="overflow: hidden;">
+                  <div class="book-row">
+                    <span class="row-buy">BUY</span>
+                    <span>$98</span>
+                    <span>100</span>
+                    <span>1</span>
+                    <div class="row-bg" style="width: 33.3%; background: var(--success); left: 0; right: auto;"></div>
+                  </div>
+                  <div class="book-row">
+                    <span class="row-buy">BUY</span>
+                    <span>$95</span>
+                    <span>250</span>
+                    <span>1</span>
+                    <div class="row-bg" style="width: 83.3%; background: var(--success); left: 0; right: auto;"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Trade Feed -->
+            <div>
+              <label style="margin-bottom: 0.4rem; display: block; font-size: 0.75rem;">Real-Time Execution Tape</label>
+              <div class="trade-tape">
+                <div class="trade-item">
+                  <span style="color: var(--primary);">APL matched</span>
+                  <span>$99.00</span>
+                  <span style="color: var(--text-muted);">150 shares</span>
+                  <span style="font-size: 0.65rem; color: var(--secondary);">Shrey (B) ↔ Akshay (S)</span>
+                </div>
+                <div class="trade-item">
+                  <span style="color: var(--primary);">APL matched</span>
+                  <span>$100.00</span>
+                  <span style="color: var(--text-muted);">100 shares</span>
+                  <span style="font-size: 0.65rem; color: var(--secondary);">Akshay (B) ↔ Shrey (S)</span>
+                </div>
+                <div class="trade-item">
+                  <span style="color: var(--primary);">APL matched</span>
+                  <span>$101.50</span>
+                  <span style="color: var(--text-muted);">50 shares</span>
+                  <span style="font-size: 0.65rem; color: var(--secondary);">Shrey (B) ↔ Akshay (S)</span>
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </section>
+
+        <!-- ROADMAP & FUTURE WORK -->
+        <section class="card" id="roadmap">
+          <h2 class="card-title">
+            <span class="card-title-icon">🗺️</span>
+            The Engineering Roadmap
+          </h2>
+          
+          <div class="timeline">
+            <!-- Milestone 1 -->
+            <div class="timeline-item">
+              <div class="timeline-marker done">1</div>
+              <div class="timeline-content">
+                <span class="timeline-period">Milestone 1 (Current)</span>
+                <div class="timeline-heading">Correctness &amp; Hardening</div>
+                <p class="timeline-body">Completed safety integration: Secure session tracking (libsodium CSPRNG), SQL transactional persistence, and zero-leak escrow loops.</p>
+              </div>
+            </div>
+            <!-- Milestone 2 -->
+            <div class="timeline-item">
+              <div class="timeline-marker active">2</div>
+              <div class="timeline-content">
+                <span class="timeline-period" style="color: var(--secondary);">Milestone 2 (June)</span>
+                <div class="timeline-heading">Scale &amp; Dynamic Listing</div>
+                <p class="timeline-body">Expose full REST API, support dynamically registered instruments via administrative dashboard, and stress-test the WebSocket layer.</p>
+              </div>
+            </div>
+            <!-- Milestone 3 -->
+            <div class="timeline-item">
+              <div class="timeline-marker">3</div>
+              <div class="timeline-content">
+                <span class="timeline-period">Milestone 3 (July)</span>
+                <div class="timeline-heading">Market Orders &amp; Charts</div>
+                <p class="timeline-body">Add Stop-Loss &amp; Market order executions. Integrate interactive price candle charts on React UI. Harden multi-threaded safety.</p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+      </div>
+
+      <!-- === COLUMN 3: ROBUST AUDIT === -->
+      <div class="column">
+        
+        <!-- RIGOROUS CODE AUDIT & HARDENING -->
+        <section class="card" id="code-hardening" style="flex-grow: 1; display: flex; flex-direction: column;">
+          <h2 class="card-title">
+            <span class="card-title-icon">🛡️</span>
+            Transition to Milestone 1
+          </h2>
+          <p style="font-size: 0.85rem;">
+            While our Liftoff model demonstrated basic order flows, transitioning to Milestone 1 involved conducting a rigorous, exhaustive codebase audit. We identified and fortified critical architectural vulnerabilities.
+          </p>
+
+          <div class="issue-grid">
+            
+            <!-- Issue #10: Escrow Refund Failures -->
+            <div class="issue-card" id="card-issue-10">
+              <div class="issue-header">
+                <span class="issue-title">Escrow Leaks on Cancel</span>
+                <span class="issue-badge badge-critical">Critical</span>
+              </div>
+              <p class="issue-desc">
+                <strong>Symptom:</strong> Orders reserve funds/shares upfront. If an order was cancelled or partially filled, the unfilled remainder was never refunded, permanently locking assets in database escrow.
+              </p>
+              <div class="issue-fix">
+                <span>✓</span> Resolved: Linked Engine cancellation callbacks to an atomic SQLite escrow-release protocol.
+              </div>
+            </div>
+
+            <!-- Issue #7: Fixed Array Hash Collisions -->
+            <div class="issue-card" id="card-issue-7">
+              <div class="issue-header">
+                <span class="issue-title">Monotonic Collision (L3 Cache)</span>
+                <span class="issue-badge badge-critical">Critical</span>
+              </div>
+              <p class="issue-desc">
+                <strong>Symptom:</strong> monotonically increasing order IDs wrapped around MAX_ORDERS, causing key collisions that silently overwrote and orphaned live resting orders.
+              </p>
+              <div class="issue-fix">
+                <span>✓</span> Resolved: Optimized pool sizes to fit within CPU L3 cache and mapped IDs via SPSC index + rolling epoch tracking.
+              </div>
+            </div>
+
+            <!-- Issue #14: DB Mutex Lock Interleaving -->
+            <div class="issue-card" id="card-issue-14">
+              <div class="issue-header">
+                <span class="issue-title">DB Transaction Flickering</span>
+                <span class="issue-badge badge-high">High</span>
+              </div>
+              <p class="issue-desc">
+                <strong>Symptom:</strong> DB mutex was released inside loops during settlements. UI threads read ledger states mid-batch, causing visual wallet fluctuations.
+              </p>
+              <div class="issue-fix">
+                <span>✓</span> Resolved: Enforced exclusive lock acquisition across the entirety of SQLite batch transactions.
+              </div>
+            </div>
+
+            <!-- Issue #16: Vector Erase Bottleneck -->
+            <div class="issue-card" id="card-issue-16">
+              <div class="issue-header">
+                <span class="issue-title">Broadcast Queue Bottlenecks</span>
+                <span class="issue-badge badge-high">High</span>
+              </div>
+              <p class="issue-desc">
+                <strong>Symptom:</strong> Network broadcast write queues used `std::vector::erase(begin())`, requiring O(N) shifts per write and degrading under stress-testing load.
+              </p>
+              <div class="issue-fix">
+                <span>✓</span> Resolved: Replaced with `std::deque` to achieve strict O(1) popped packet dispatches.
+              </div>
+            </div>
+
+          </div>
+        </section>
+
+      </div>
+
+    </div>
+
+    <!-- --- POSTER FOOTER --- -->
+    <footer>
+      O(1) Exchange project details and system performance indices are hosted at NUS. Developed on <span>Apollo track</span> for NUS Orbital 2026.
+    </footer>
+
+  </div>
+
+</body>
+</html>

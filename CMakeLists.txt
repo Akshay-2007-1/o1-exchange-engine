@@ -50,7 +50,7 @@ else()
 endif()
 
 # ── Main executable ────────────────────────
-add_executable(engine src/main.cpp src/server.cpp)
+add_executable(engine src/main.cpp)
 target_include_directories(engine PRIVATE include)
 find_package(SQLite3 REQUIRED)
 target_link_libraries(engine ${BOOST_LINK_LIB} pthread nlohmann_json::nlohmann_json sqlite3 sodium)

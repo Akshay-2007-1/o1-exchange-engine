@@ -218,11 +218,17 @@ public:
         return profile;
     }
 
-    // Called extremely fast in a background thread
-    void settle_trade(int64_t buyer_id, int64_t seller_id, uint16_t company_id, uint32_t quantity, uint32_t price) {
-        // Convert price (cents) to dollars for the balance table
+    struct TradeRecord {
+        int64_t buyer_id;
+        int64_t seller_id;
+        uint16_t company_id;
+        uint32_t quantity;
+        uint32_t price;
+        uint32_t buyer_limit_price;
+    };
+
+    void settle_trade_unlocked(int64_t buyer_id, int64_t seller_id, uint16_t company_id, uint32_t quantity, uint32_t price, uint32_t buyer_limit_price) {
         double total = (static_cast<double>(price) / 100.0) * quantity;
-        std::lock_guard<std::mutex> lock(db_mutex_);
 
         // Credit shares to buyer
         sqlite3_clear_bindings(stmt_settle_shares_);
@@ -238,6 +244,53 @@ public:
         sqlite3_bind_int64(stmt_settle_cash_, 2, seller_id);
         sqlite3_step(stmt_settle_cash_);
         sqlite3_reset(stmt_settle_cash_);
+
+        // Price improvement cash refund for buyer
+        if (buyer_limit_price > price) {
+            double refund = (static_cast<double>(buyer_limit_price - price) / 100.0) * quantity;
+            sqlite3_clear_bindings(stmt_settle_cash_);
+            sqlite3_bind_double(stmt_settle_cash_, 1, refund);
+            sqlite3_bind_int64(stmt_settle_cash_, 2, buyer_id);
+            sqlite3_step(stmt_settle_cash_);
+            sqlite3_reset(stmt_settle_cash_);
+        }
+    }
+
+    void settle_trade(int64_t buyer_id, int64_t seller_id, uint16_t company_id, uint32_t quantity, uint32_t price, uint32_t buyer_limit_price = 0) {
+        std::lock_guard<std::mutex> lock(db_mutex_);
+        settle_trade_unlocked(buyer_id, seller_id, company_id, quantity, price, buyer_limit_price == 0 ? price : buyer_limit_price);
+    }
+
+    void settle_batch(const std::vector<TradeRecord>& trades) {
+        std::lock_guard<std::mutex> lock(db_mutex_);
+        sqlite3_step(stmt_begin_);
+        sqlite3_reset(stmt_begin_);
+
+        for (const auto& t : trades) {
+            settle_trade_unlocked(t.buyer_id, t.seller_id, t.company_id, t.quantity, t.price, t.buyer_limit_price);
+        }
+
+        sqlite3_step(stmt_commit_);
+        sqlite3_reset(stmt_commit_);
+    }
+
+    void release_cash(int64_t user_id, double amount) {
+        std::lock_guard<std::mutex> lock(db_mutex_);
+        sqlite3_clear_bindings(stmt_settle_cash_);
+        sqlite3_bind_double(stmt_settle_cash_, 1, amount);
+        sqlite3_bind_int64(stmt_settle_cash_, 2, user_id);
+        sqlite3_step(stmt_settle_cash_);
+        sqlite3_reset(stmt_settle_cash_);
+    }
+
+    void release_shares(int64_t user_id, uint16_t company_id, uint32_t quantity) {
+        std::lock_guard<std::mutex> lock(db_mutex_);
+        sqlite3_clear_bindings(stmt_settle_shares_);
+        sqlite3_bind_int64(stmt_settle_shares_, 1, user_id);
+        sqlite3_bind_int(stmt_settle_shares_, 2, company_id);
+        sqlite3_bind_int64(stmt_settle_shares_, 3, quantity);
+        sqlite3_step(stmt_settle_shares_);
+        sqlite3_reset(stmt_settle_shares_);
     }
 
 private:
@@ -340,12 +393,13 @@ private:
     }
 
     std::string generate_token() {
-        static const char chars[] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-        std::random_device rd;
-        std::mt19937 gen(rd());
-        std::uniform_int_distribution<> dis(0, sizeof(chars) - 2);
+        static const char chars[] =
+            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+        uint8_t raw[32];
+        randombytes_buf(raw, sizeof(raw));
         std::string token(32, ' ');
-        for (auto& c : token) c = chars[dis(gen)];
+        for (int i = 0; i < 32; i++)
+            token[i] = chars[raw[i] % 62];
         return token;
     }
 };

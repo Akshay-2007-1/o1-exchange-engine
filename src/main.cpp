@@ -1,5 +1,4 @@
 #include <iostream>
-#include <boost/asio/io_context.hpp>
 #include "OrderBook.h"
 #include "Market.h"
 #include "Server.h"
@@ -17,9 +16,11 @@ int main() {
         {3, "CRN", "Crown Energy", 1'750'000}
     });
     Database test_db("exchange.db");
-    test_db.create_user("shrey", "pass123");
+    auto res_shrey = test_db.create_user("shrey", "pass123");
     test_db.create_user("akshay", "pass123");
-    test_db.settle_trade(1, 1, 1, 500, 0.0); // give shrey 500 APL shares free
+    if (res_shrey.ok) {
+        test_db.settle_trade(res_shrey.id, res_shrey.id, 1, 500, 0.0); // give shrey 500 APL shares free
+    }
     
     boost::asio::io_context ioc;
     Server server(ioc, 9001, market);
