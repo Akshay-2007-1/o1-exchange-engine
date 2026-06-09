@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 #include <algorithm>
+#include "OrderBook.h"
 
 struct Company {
     uint16_t id;
