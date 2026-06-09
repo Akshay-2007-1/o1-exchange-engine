@@ -1,6 +1,6 @@
 # O(1) Exchange — Matching Engine
 
-A high-performance, in-memory limit order book and matching engine built in C++, with a real-time React trading dashboard and multi-instrument market support. Built for NUS Orbital 2026 (Artemis level).
+A high-performance, in-memory limit order book and matching engine built in C++, with a real-time React trading dashboard and multi-instrument market support. Built for NUS Orbital 2026 (Apollo level).
 
 ---
 
@@ -28,8 +28,7 @@ include/Market.h            Multi-instrument market state
         │  InstrumentState = { Company metadata + OrderBook + mutex }
         │
 include/OrderBook.h         Core matching engine (per instrument)
-        │  bids: map<price, queue<Order>, descending>
-        │  asks: map<price, queue<Order>, ascending>
+        │  bids/asks: O(1) multi-level bitmaps + pre-allocated linked lists
         │
 src/main.cpp                Bootstraps market with 3 companies, starts server
 tests/test_orderbook.cpp    Google Test suite
@@ -68,30 +67,29 @@ struct Trade {
 
 ```cpp
 class OrderBook {
-    // bids sorted descending — bids.begin() is always the best (highest) bid — O(1)
-    std::map<double, PriceLevel, std::greater<double>> bids;
+    std::vector<OrderNode> node_pool_;
+    OrderList bids_[MAX_PRICE];
+    OrderList asks_[MAX_PRICE];
 
-    // asks sorted ascending — asks.begin() is always the best (lowest) ask — O(1)
-    std::map<double, PriceLevel> asks;
-
-    // PriceLevel = std::queue<Order> — FIFO gives time priority for free
+    // O(1) multi-level bitmaps for price discovery
+    uint64_t bids_l1_[BITMAP_L1_SIZE], bids_l2_[BITMAP_L2_SIZE], bids_l3_;
+    uint64_t asks_l1_[BITMAP_L1_SIZE], asks_l2_[BITMAP_L2_SIZE], asks_l3_;
 };
 ```
 
-**Price priority** is enforced by the map sort order. **Time priority** is enforced by the queue at each price level — the earliest order is always at `front()`.
+**Price priority** is enforced by an O(1) multi-level bitmap allowing for instant retrieval of the best price level. **Time priority** is enforced by a linked list at each price level. `OrderNode` objects are pre-allocated and packed into exactly 64 bytes to perfectly fit cache lines and prevent false sharing.
 
 ### Matching algorithm
 
 When a new order arrives, `add_order()` calls `match_buy()` or `match_sell()`:
 
 ```
-while (incoming has quantity remaining AND opposing side is not empty):
-    best_opposing = opposing_side.begin()       // O(1)
-    if prices don't cross: stop
-    consume from front of that price level's queue  // O(1), FIFO
+while (incoming has quantity remaining AND best_price crosses):
+    best_price = get_best_ask()                 // O(1) via hardware __builtin_ctzll on bitmaps
+    consume from head of asks_[best_price] list // O(1), FIFO
     generate a Trade event
     fire on_trade callback
-    if price level is empty: erase it
+    if list is empty: clear_bit(best_price)     // O(1)
 if incoming still has quantity: add to resting book
 ```
 

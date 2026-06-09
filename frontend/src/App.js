@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
 
 // const WS_URL = process.env.REACT_APP_WS_URL || "ws://20.205.25.160:9001";
-const WS_URL = "ws://localhost:9001";
+const WS_URL = "ws://127.0.0.1:9001";
 
 const currency = new Intl.NumberFormat("en-US", {
   minimumFractionDigits: 2,
@@ -261,6 +261,7 @@ function TradeFeed({ trades, companies }) {
 export default function App() {
   const [view, setView] = useState("LOADING"); // LOADING, LOGIN, REGISTER, DASHBOARD
   const [user, setUser] = useState(null);
+  const userRef = useRef(null);
   const [cash, setCash] = useState(0);
   const [portfolio, setPortfolio] = useState([]);
   const [authError, setAuthError] = useState("");
@@ -288,6 +289,8 @@ export default function App() {
   const reconnectAttemptsRef = useRef(0);
   const shouldReconnectRef = useRef(true);
 
+  const [myOrdersByCompany, setMyOrdersByCompany] = useState({});
+
   const applyBookSnapshot = useCallback(msg => {
     const book = normalizedBook(msg);
 
@@ -304,6 +307,19 @@ export default function App() {
     setBuyOrders(book.buyOrders);
     setSellOrders(book.sellOrders);
     setMarketReady(true);
+
+    if (userRef.current) {
+      const buys = book.buyOrders
+        .filter(o => Number(o.user_id) === Number(userRef.current.userId))
+        .map(o => ({ ...o, side: "BUY", company_id: book.companyId }));
+      const sells = book.sellOrders
+        .filter(o => Number(o.user_id) === Number(userRef.current.userId))
+        .map(o => ({ ...o, side: "SELL", company_id: book.companyId }));
+      setMyOrdersByCompany(prev => ({
+        ...prev,
+        [book.companyId]: { buys, sells }
+      }));
+    }
   }, []);
 
   const applyTradeHistory = useCallback(trades => {
@@ -336,6 +352,7 @@ export default function App() {
       const savedUser = localStorage.getItem("exchange_user");
       if (savedUser) {
         const parsed = JSON.parse(savedUser);
+        userRef.current = parsed;
         setUser(parsed);
         setView("DASHBOARD");
         socket.send(JSON.stringify({ 
@@ -389,10 +406,11 @@ export default function App() {
             username: msg.username
           };
           localStorage.setItem("exchange_user", JSON.stringify(userData));
+          userRef.current = userData;
           setUser(userData);
           setAuthError("");
           setView("DASHBOARD");
-          socket.send(JSON.stringify({ type: "snapshot" }));
+          socket.send(JSON.stringify({ type: "snapshot", token: userData.token }));
         }
 
         if (msg.type === "user_update") {
@@ -486,9 +504,11 @@ export default function App() {
 
   const handleLogout = () => {
     localStorage.removeItem("exchange_user");
+    userRef.current = null;
     setUser(null);
     setCash(0);
     setPortfolio([]);
+    setMyOrdersByCompany({});
     setView("LOGIN");
   };
 
@@ -589,10 +609,10 @@ export default function App() {
 
   const myOpenOrders = useMemo(() => {
     if (!user) return [];
-    const buys = buyOrders.filter(o => Number(o.user_id) === Number(user.userId)).map(o => ({...o, side: "BUY", company_id: selectedCompanyId}));
-    const sells = sellOrders.filter(o => Number(o.user_id) === Number(user.userId)).map(o => ({...o, side: "SELL", company_id: selectedCompanyId}));
-    return [...buys, ...sells].sort((a,b) => b.timestamp - a.timestamp);
-  }, [buyOrders, sellOrders, user, selectedCompanyId]);
+    return Object.values(myOrdersByCompany)
+      .flatMap(c => [...(c.buys || []), ...(c.sells || [])])
+      .sort((a, b) => b.timestamp - a.timestamp);
+  }, [myOrdersByCompany, user]);
 
   const validatePrice = value => {
     if (value === "") {

@@ -6,43 +6,54 @@
 #include <vector>
 #include <algorithm>
 
-constexpr uint32_t MAX_PRICE = 100000;                     
-constexpr uint32_t BITMAP_L1_SIZE = (MAX_PRICE / 64) + 1;  
-constexpr uint32_t BITMAP_L2_SIZE = (BITMAP_L1_SIZE / 64) + 1; 
-constexpr uint32_t MAX_ORDERS = 1000000;                   
-constexpr uint32_t NULL_IDX = -1;                          
+constexpr uint32_t MAX_PRICE = 100000;
+constexpr uint32_t BITMAP_L1_SIZE = (MAX_PRICE / 64) + 1;
+constexpr uint32_t BITMAP_L2_SIZE = (BITMAP_L1_SIZE / 64) + 1;
+constexpr uint32_t MAX_ORDERS = 100000;
+constexpr uint32_t NULL_IDX = -1;
 
 #pragma pack(push, 1)
 struct Order {
     uint64_t id;         // 8 bytes
-    int64_t  user_id;    // 8 bytes - Embedded to remove external hash map
     uint64_t timestamp;  // 8 bytes
+    uint32_t user_id;    // 4 bytes
     uint32_t price;      // 4 bytes
     uint32_t quantity;   // 4 bytes
     uint16_t company_id; // 2 bytes
     bool     side;       // 1 byte (true for BUY, false for SELL)
-    uint8_t  padding[5]; // 5 bytes padding -> Total 40 bytes
-};
-
-struct OrderNode {
-    Order order;         // 40 bytes
-    uint32_t prev_idx;   // 4 bytes
-    uint32_t next_idx;   // 4 bytes
-    uint8_t  padding[16];// 16 bytes padding -> Total 64 bytes
+    uint8_t  padding[1]; // 1 bytes padding -> Total 32 bytes
 };
 #pragma pack(pop)
 
-static_assert(sizeof(OrderNode) == 64, "OrderNode must be exactly 64 bytes to prevent false sharing and cache straddling");
-
-struct Trade {
-    uint64_t buy_order_id;
-    uint64_t sell_order_id;
-    int64_t  buyer_user_id;
-    int64_t  seller_user_id;
-    uint32_t price;
-    uint32_t quantity;
-    uint16_t company_id;
+#pragma pack(push, 1)
+struct OrderNode {
+    Order order;         // 32 bytes
+    uint32_t prev_idx;   // 4 bytes
+    uint32_t next_idx;   // 4 bytes
+    uint8_t  padding[24];// 24 bytes padding -> Total 64 bytes
 };
+#pragma pack(pop)
+static_assert(sizeof(OrderNode) == 64, "OrderNode must be exactly 64 bytes");
+
+#pragma pack(push, 1)
+struct Trade {
+    uint64_t buy_order_id;      // 8 bytes
+    uint64_t sell_order_id;     // 8 bytes
+
+    uint32_t buyer_user_id;     // 4 bytes
+    uint32_t seller_user_id;    // 4 bytes
+
+    uint32_t price;             // 4 bytes
+    uint32_t quantity;          // 4 bytes
+
+    uint32_t buyer_limit_price; // 4 bytes
+    uint32_t seller_limit_price;// 4 bytes
+
+    uint16_t company_id;        // 2 bytes
+    uint8_t  padding[6];        // 6 bytes padding -> Total 48 bytes
+};
+#pragma pack(pop)
+static_assert(sizeof(Trade) == 48, "Trade must be exactly 48 bytes");
 
 class ITradeListener {
 public:
@@ -59,21 +70,30 @@ struct OrderList {
 
 class OrderBook {
 public:
+    #pragma pack(push, 1)
     struct DepthLevel {
-        uint32_t price;
-        uint32_t quantity;
-        uint32_t orders;
+        uint32_t price;         // 4 bytes
+        uint32_t quantity;      // 4 bytes
+        uint32_t orders;        // 4 bytes
+        uint8_t  padding[4];    // 4 bytes padding -> Total 16 bytes
     };
+    #pragma pack(pop)
+    static_assert(sizeof(DepthLevel) == 16, "DepthLevel must be exactly 16 bytes");
 
+    #pragma pack(push, 1)
     struct OrderSnapshot {
-        uint64_t id;
-        int64_t  user_id; // Added to filter for "My Open Orders"
-        uint64_t timestamp;
-        uint32_t price;
-        uint32_t quantity;
+        uint64_t id;            // 8 bytes
+        uint64_t timestamp;     // 8 bytes
+        uint32_t user_id;       // 4 bytes
+        uint32_t price;         // 4 bytes
+        uint32_t quantity;      // 4 bytes
+        uint8_t  padding[4];    // 4 bytes padding -> Total 32 bytes
     };
+#pragma pack(pop)
+    static_assert(sizeof(OrderSnapshot) == 32, "OrderSnapshot must be exactly 32 bytes");
 
     ITradeListener* trade_listener = nullptr;
+    uint64_t order_id_counter = 0;
 
     OrderBook() {
         node_pool_.resize(MAX_ORDERS);
@@ -82,31 +102,50 @@ public:
         for (uint32_t i = 0; i < MAX_ORDERS; ++i) {
             free_indices_.push_back(MAX_ORDERS - 1 - i); 
         }
-
-        order_map_array_.resize(MAX_ORDERS, NULL_IDX);
     }
 
-    void add_order(const Order& order_ref) {
-        if (order_ref.price >= MAX_PRICE) [[unlikely]] return; 
-
-        Order order = order_ref;
-
-        if (order.side) { 
-            match_buy(order);
-            if (order.quantity > 0) insert_to_book(true, order);
-        } else {          
-            match_sell(order);
-            if (order.quantity > 0) insert_to_book(false, order);
+    bool add_order(Order& order, uint32_t& rejected_qty) {
+        if (order.price >= MAX_PRICE) [[unlikely]] {
+            rejected_qty = order.quantity;
+            return false;
         }
+
+        if (free_indices_.empty()) [[unlikely]] {
+            rejected_qty = order.quantity;
+            return false; 
+        }
+
+        uint32_t pool_idx = free_indices_.back();
+        free_indices_.pop_back();
+
+        order.id = ((++order_id_counter_) << 32) | pool_idx;
+
+        rejected_qty = 0;
+        if (order.side) { 
+            match_buy(order, rejected_qty);
+        } else {          
+            match_sell(order, rejected_qty);
+        }
+
+        if (order.quantity > 0 && rejected_qty == 0) {
+            insert_to_book(order.side, order, pool_idx);
+        } else {
+            free_indices_.push_back(pool_idx);
+        }
+        return true;
     }
 
-    bool cancel_order(bool side, uint32_t price, uint64_t order_id, int64_t user_id) {
-        uint32_t target_idx = order_map_array_[order_id % MAX_ORDERS];
-        if (target_idx == NULL_IDX) return false;
+    bool cancel_order(uint64_t order_id, int64_t user_id, Order& cancelled_order) {
+        uint32_t target_idx = static_cast<uint32_t>(order_id & 0xFFFFFFFFULL);
+        if (target_idx >= MAX_ORDERS) return false;
 
         OrderNode& node = node_pool_[target_idx];
         
-        if (node.order.id != order_id || node.order.user_id != user_id || node.order.side != side) [[unlikely]] return false;
+        if (node.order.id != order_id || node.order.user_id != user_id) [[unlikely]] return false;
+
+        cancelled_order = node.order;
+        bool side = node.order.side;
+        uint32_t price = node.order.price;
 
         OrderList& list = side ? bids_[price] : asks_[price];
 
@@ -123,9 +162,9 @@ public:
             clear_bit(side, price);
         }
 
+        node.order.id = 0;
+
         free_indices_.push_back(target_idx);
-        order_map_array_[order_id % MAX_ORDERS] = NULL_IDX; 
-        
         return true;
     }
 
@@ -214,7 +253,6 @@ public:
 private:
     std::vector<OrderNode> node_pool_;
     std::vector<uint32_t> free_indices_;
-    std::vector<uint32_t> order_map_array_;
 
     OrderList bids_[MAX_PRICE];
     OrderList asks_[MAX_PRICE];
@@ -271,8 +309,8 @@ private:
         }
     }
 
-    int32_t get_best_bid() const {
-        if (bids_l3_ == 0) return -1;
+    uint32_t get_best_bid() const {
+        if (bids_l3_ == 0) return NULL_IDX;
         uint32_t l3_bit = 63 - __builtin_clzll(bids_l3_);
         uint32_t l2_bit = 63 - __builtin_clzll(bids_l2_[l3_bit]);
         uint32_t l1_idx = (l3_bit * 64) + l2_bit;
@@ -280,8 +318,8 @@ private:
         return (l1_idx * 64) + l1_bit;
     }
 
-    int32_t get_best_ask() const {
-        if (asks_l3_ == 0) return -1;
+    uint32_t get_best_ask() const {
+        if (asks_l3_ == 0) return NULL_IDX;
         uint32_t l3_bit = __builtin_ctzll(asks_l3_);
         uint32_t l2_bit = __builtin_ctzll(asks_l2_[l3_bit]);
         uint32_t l1_idx = (l3_bit * 64) + l2_bit;
@@ -289,71 +327,71 @@ private:
         return (l1_idx * 64) + l1_bit;
     }
 
-    void insert_to_book(bool side, const Order& order) {
-        if (free_indices_.empty()) [[unlikely]] {
-            std::cerr << "CRITICAL ERROR: Order pool exhausted.\n";
-            return; 
-        }
-
-        uint32_t new_idx = free_indices_.back();
-        free_indices_.pop_back();
-
-        OrderNode& node = node_pool_[new_idx];
+    void insert_to_book(bool side, const Order& order, uint32_t pool_idx) {
+        OrderNode& node = node_pool_[pool_idx];
         node.order = order;
         node.prev_idx = NULL_IDX;
         node.next_idx = NULL_IDX;
 
-        order_map_array_[order.id % MAX_ORDERS] = new_idx;
-
         OrderList& list = side ? bids_[order.price] : asks_[order.price];
 
         if (list.tail_idx == NULL_IDX) {
-            list.head_idx = list.tail_idx = new_idx;
+            list.head_idx = list.tail_idx = pool_idx;
             set_bit(side, order.price);
         } else {
-            node_pool_[list.tail_idx].next_idx = new_idx;
+            node_pool_[list.tail_idx].next_idx = pool_idx;
             node.prev_idx = list.tail_idx;
-            list.tail_idx = new_idx;
+            list.tail_idx = pool_idx;
         }
 
         list.total_quantity += order.quantity;
         list.order_count++;
     }
 
-    void match_buy(Order& incoming) {
-        int32_t best_ask = get_best_ask();
-        while (incoming.quantity > 0 && best_ask != -1 && best_ask <= incoming.price) {
-            execute_match(incoming, asks_[best_ask], best_ask, false);
+    void match_buy(Order& incoming, uint32_t& rejected_qty) {
+        uint32_t best_ask = get_best_ask();
+        while (incoming.quantity > 0 && best_ask != NULL_IDX && best_ask <= incoming.price) {
+            execute_match(incoming, asks_[best_ask], best_ask, false, rejected_qty);
+            if (rejected_qty > 0) break;
             if (asks_[best_ask].order_count == 0) clear_bit(false, best_ask);
             best_ask = get_best_ask(); 
         }
     }
 
-    void match_sell(Order& incoming) {
-        int32_t best_bid = get_best_bid();
-        while (incoming.quantity > 0 && best_bid != -1 && best_bid >= incoming.price) {
-            execute_match(incoming, bids_[best_bid], best_bid, true);
+    void match_sell(Order& incoming, uint32_t& rejected_qty) {
+        uint32_t best_bid = get_best_bid();
+        while (incoming.quantity > 0 && best_bid != NULL_IDX && best_bid >= incoming.price) {
+            execute_match(incoming, bids_[best_bid], best_bid, true, rejected_qty);
+            if (rejected_qty > 0) break;
             if (bids_[best_bid].order_count == 0) clear_bit(true, best_bid);
             best_bid = get_best_bid(); 
         }
     }
 
-    void execute_match(Order& incoming, OrderList& list, uint32_t exec_price, bool matching_against_bids) {
+    void execute_match(Order& incoming, OrderList& list, uint32_t exec_price, bool matching_against_bids, uint32_t& rejected_qty) {
         while (incoming.quantity > 0 && list.head_idx != NULL_IDX) {
             uint32_t resting_idx = list.head_idx;
             OrderNode& resting_node = node_pool_[resting_idx];
             Order& resting = resting_node.order;
 
+            // Self-trade prevention check:
+            if (incoming.user_id == resting.user_id) {
+                rejected_qty = incoming.quantity;
+                incoming.quantity = 0;
+                break;
+            }
+
             uint32_t fill_qty = std::min(incoming.quantity, resting.quantity);
 
             Trade trade;
-            trade.company_id     = incoming.company_id;
-            trade.price          = exec_price;
-            trade.quantity       = fill_qty;
-            trade.buy_order_id   = incoming.side ? incoming.id : resting.id;
-            trade.sell_order_id  = !incoming.side ? incoming.id : resting.id;
-            trade.buyer_user_id  = incoming.side ? incoming.user_id : resting.user_id;
-            trade.seller_user_id = !incoming.side ? incoming.user_id : resting.user_id;
+            trade.company_id        = incoming.company_id;
+            trade.price             = exec_price;
+            trade.quantity          = fill_qty;
+            trade.buy_order_id      = incoming.side ? incoming.id : resting.id;
+            trade.sell_order_id     = !incoming.side ? incoming.id : resting.id;
+            trade.buyer_user_id     = incoming.side ? incoming.user_id : resting.user_id;
+            trade.seller_user_id    = !incoming.side ? incoming.user_id : resting.user_id;
+            trade.buyer_limit_price = incoming.side ? incoming.price : resting.price;
 
             incoming.quantity    -= fill_qty;
             resting.quantity     -= fill_qty;
@@ -367,7 +405,7 @@ private:
                 else list.tail_idx = NULL_IDX;
                 
                 list.order_count--;
-                order_map_array_[resting.id % MAX_ORDERS] = NULL_IDX; 
+                resting_node.order.id = 0; // Mark inactive
                 
                 free_indices_.push_back(resting_idx);
             }

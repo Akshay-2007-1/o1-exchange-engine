@@ -1,5 +1,6 @@
 #pragma once
 
+#include <boost/asio/io_context.hpp>
 #include <boost/beast/core.hpp>
 #include <boost/beast/websocket.hpp>
 #include <boost/asio/ip/tcp.hpp>
@@ -12,10 +13,9 @@
 #include <mutex>
 #include <thread>
 #include <vector>
+#include <deque>
 #include <atomic>
 #include <condition_variable>
-#include "Market.h"
-#include "Database.h"
 
 namespace beast     = boost::beast;
 namespace websocket = beast::websocket;
@@ -250,7 +250,7 @@ private:
             [self = shared_from_this()](beast::error_code ec, std::size_t bytes_transferred) {
                 boost::ignore_unused(bytes_transferred);
                 if (ec) { self->registry_.remove(self); return; }
-                self->write_queue_.erase(self->write_queue_.begin());
+                self->write_queue_.pop_front();
                 if (!self->write_queue_.empty()) self->do_write();
             });
     }
@@ -319,6 +319,10 @@ private:
             }
 
             if (type == "cancel") {
+                if (!msg.contains("order_id")) {
+                    send(json{{"type", "error"}, {"message", "Missing order_id for cancellation."}}.dump());
+                    return;
+                }
                 std::string token = msg.value("token", "");
                 auto session_result = db_.validate_session(token);
                 if (!session_result.ok) {
@@ -329,8 +333,6 @@ private:
                 EngineTask task;
                 task.type = EngineTask::CANCEL;
                 task.company_id = msg.value("company_id", default_company_id_);
-                task.side = (msg["side"] == "BUY");
-                task.price = msg["price"].get<uint32_t>();
                 task.order_id = msg["order_id"].get<uint64_t>();
                 task.user_id = session_result.id;
                 while (!engine_queue_.push(task)) std::this_thread::yield();
@@ -338,9 +340,15 @@ private:
             }
 
             if (type == "order") {
+                if (!msg.contains("price") || !msg.contains("quantity") || !msg.contains("side") || !msg.contains("timestamp")) {
+                    send(json{{"type", "error"}, {"message", "Missing required fields for order submission."}}.dump());
+                    return;
+                }
                 const uint16_t company_id = msg.value("company_id", default_company_id_);
                 const bool side = (msg["side"] == "BUY");
                 const uint32_t price = msg["price"].get<uint32_t>();
+                const uint32_t quantity = msg["quantity"].get<uint32_t>();
+                const uint64_t timestamp = msg["timestamp"].get<uint64_t>();
                 
                 if (price >= 100000) {
                      send(json{{"type", "error"}, {"message", "Price exceeds maximum allowed ($999.99)."}} .dump());
@@ -358,24 +366,23 @@ private:
                 current_user_id_ = user_id;
 
                 if (side) { 
-                    double required_cash = (static_cast<double>(price) / 100.0) * msg["quantity"].get<uint32_t>();
+                    double required_cash = (static_cast<double>(price) / 100.0) * quantity;
                     auto check = db_.reserve_cash(user_id, required_cash);
                     if (!check.ok) { send(json{{"type", "error"}, {"message", check.error}} .dump()); return; }
                 } else {
-                    auto check = db_.reserve_shares(user_id, company_id, msg["quantity"].get<uint32_t>());
+                    auto check = db_.reserve_shares(user_id, company_id, quantity);
                     if (!check.ok) { send(json{{"type", "error"}, {"message", check.error}} .dump()); return; }
                 }
 
                 EngineTask task;
                 task.type = EngineTask::ORDER;
                 task.company_id = company_id;
-                task.order.id = next_order_id_.fetch_add(1, std::memory_order_relaxed);
                 task.order.user_id = user_id;
                 task.order.company_id = company_id;
                 task.order.side = side;
                 task.order.price = price;
-                task.order.quantity = msg["quantity"].get<uint32_t>();
-                task.order.timestamp = msg["timestamp"].get<uint64_t>();
+                task.order.quantity = quantity;
+                task.order.timestamp = timestamp;
                 
                 while (!engine_queue_.push(task)) std::this_thread::yield();
             }
@@ -386,7 +393,7 @@ private:
 
     websocket::stream<tcp::socket> ws_;
     beast::flat_buffer buffer_;
-    std::vector<OutboundMsg> write_queue_;
+    std::deque<OutboundMsg> write_queue_;
 
     MarketState& market_;
     Database& db_;
@@ -413,13 +420,25 @@ inline void SessionRegistry::broadcast_user_update(int64_t user_id) {
 
 class Server : public ITradeListener {
 public:
-    struct DbTask {
-        int64_t buyer_id;
-        int64_t seller_id;
-        uint16_t company_id;
-        uint32_t quantity;
-        uint32_t price;
+    enum DbTaskType : uint8_t {
+        DB_SETTLE = 0,
+        DB_REFUND_CASH = 1,
+        DB_REFUND_SHARES = 2
     };
+
+#pragma pack(push, 1)
+    struct DbTask {
+        int64_t  buyer_id;          // 8 bytes (used as user_id for refunds)
+        int64_t  seller_id;         // 8 bytes
+        uint32_t quantity;          // 4 bytes
+        uint32_t price;             // 4 bytes
+        uint32_t buyer_limit_price; // 4 bytes
+        uint16_t company_id;        // 2 bytes
+        uint8_t  type;              // 1 byte (0 = DB_SETTLE, 1 = DB_REFUND_CASH, 2 = DB_REFUND_SHARES)
+        uint8_t  padding[1];        // 1 byte padding -> Total 32 bytes
+    };
+#pragma pack(pop)
+    static_assert(sizeof(DbTask) == 32, "DbTask must be exactly 32 bytes");
 
     Server(net::io_context& ioc, unsigned short port, MarketState& market)
         : acceptor_(ioc, tcp::endpoint(tcp::v4(), port)), market_(market), db_("exchange.db") {
@@ -445,7 +464,6 @@ public:
     void on_trade(const Trade& t) override {
         history_.record(t);
 
-        // Serialize directly into packed binary format avoiding JSON stringification overhead
         BinaryTradeMsg btm;
         btm.msg_type      = 1; 
         btm.company_id    = t.company_id;
@@ -459,7 +477,16 @@ public:
 
         {
             std::lock_guard<std::mutex> q_lock(db_q_mutex_);
-            db_queue_front_.push_back({t.buyer_user_id, t.seller_user_id, t.company_id, t.quantity, t.price});
+            db_queue_front_.push_back({
+                t.buyer_user_id,
+                t.seller_user_id,
+                t.quantity,
+                t.price,
+                t.buyer_limit_price,
+                t.company_id,
+                DB_SETTLE,
+                {0}
+            });
         }
         db_q_cv_.notify_one();
     }
@@ -486,12 +513,56 @@ private:
                 if (!instrument) continue;
 
                 if (task.type == EngineTask::ORDER) {
-                    instrument->book.add_order(task.order);
-                    registry_.broadcast(book_to_json(*instrument).dump());
+                    uint32_t rejected_qty = 0;
+                    bool ok = instrument->book.add_order(task.order, rejected_qty);
+                    if (!ok) {
+                        {
+                            std::lock_guard<std::mutex> q_lock(db_q_mutex_);
+                            if (task.order.side) {
+                                db_queue_front_.push_back({task.order.user_id, 0, task.order.quantity, task.order.price, 0, task.company_id, DB_REFUND_CASH, {0}});
+                            } else {
+                                db_queue_front_.push_back({task.order.user_id, 0, task.order.quantity, 0, 0, task.company_id, DB_REFUND_SHARES, {0}});
+                            }
+                        }
+                        db_q_cv_.notify_one();
+
+                        if (task.session) {
+                            task.session->send(json{{"type", "error"}, {"message", "Order rejected: exchange capacity limit reached."}}.dump());
+                        }
+                    } else {
+                        registry_.broadcast(book_to_json(*instrument).dump());
+
+                        if (rejected_qty > 0) {
+                            {
+                                std::lock_guard<std::mutex> q_lock(db_q_mutex_);
+                                if (task.order.side) {
+                                    db_queue_front_.push_back({task.order.user_id, 0, rejected_qty, task.order.price, 0, task.company_id, DB_REFUND_CASH, {0}});
+                                } else {
+                                    db_queue_front_.push_back({task.order.user_id, 0, rejected_qty, 0, 0, task.company_id, DB_REFUND_SHARES, {0}});
+                                }
+                            }
+                            db_q_cv_.notify_one();
+
+                            if (task.session) {
+                                task.session->send(json{{"type", "error"}, {"message", "Order partially cancelled due to self-trade prevention."}}.dump());
+                            }
+                        }
+                    }
                 } 
                 else if (task.type == EngineTask::CANCEL) {
-                    if (instrument->book.cancel_order(task.side, task.price, task.order_id, task.user_id)) {
+                    Order cancelled_order;
+                    if (instrument->book.cancel_order(task.order_id, task.user_id, cancelled_order)) {
                         registry_.broadcast(book_to_json(*instrument).dump());
+
+                        {
+                            std::lock_guard<std::mutex> q_lock(db_q_mutex_);
+                            if (cancelled_order.side) {
+                                db_queue_front_.push_back({task.user_id, 0, cancelled_order.quantity, cancelled_order.price, 0, task.company_id, DB_REFUND_CASH, {0}});
+                            } else {
+                                db_queue_front_.push_back({task.user_id, 0, cancelled_order.quantity, 0, 0, task.company_id, DB_REFUND_SHARES, {0}});
+                            }
+                        }
+                        db_q_cv_.notify_one();
                     }
                 } 
                 else if (task.type == EngineTask::SNAPSHOT) {
@@ -517,13 +588,34 @@ private:
             }
 
             if (!db_queue_back_.empty()) {
-                db_.begin_transaction();
                 std::set<int64_t> affected_users;
+
+                db_.begin_transaction();
+
                 for (const auto& task : db_queue_back_) {
-                    db_.settle_trade(task.buyer_id, task.seller_id, task.company_id, task.quantity, task.price);
-                    affected_users.insert(task.buyer_id);
-                    affected_users.insert(task.seller_id);
+                    if (task.type == DB_SETTLE) {
+                        db_.settle_trade_unlocked(
+                            task.buyer_id,
+                            task.seller_id,
+                            task.company_id,
+                            task.quantity,
+                            task.price,
+                            task.buyer_limit_price
+                        );
+                        affected_users.insert(task.buyer_id);
+                        affected_users.insert(task.seller_id);
+                    } 
+                    else if (task.type == DB_REFUND_CASH) {
+                        double amount = (static_cast<double>(task.price) / 100.0) * task.quantity;
+                        db_.release_cash(task.buyer_id, amount);
+                        affected_users.insert(task.buyer_id);
+                    } 
+                    else if (task.type == DB_REFUND_SHARES) {
+                        db_.release_shares(task.buyer_id, task.company_id, task.quantity);
+                        affected_users.insert(task.buyer_id);
+                    }
                 }
+
                 db_.commit_transaction();
 
                 for (int64_t uid : affected_users) {
