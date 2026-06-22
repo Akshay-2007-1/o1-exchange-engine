@@ -367,6 +367,24 @@ private:
                 return;
             }
 
+            if (type == "leaderboard")
+            {
+                auto rows = db_.get_leaderboard(20);
+                json arr = json::array();
+                int rank = 1;
+                for (const auto &r : rows)
+                {
+                    arr.push_back({
+                        {"rank",         rank++},
+                        {"username",     r.username},
+                        {"cash",         r.cash},
+                        {"total_shares", r.total_shares}
+                    });
+                }
+                send(json{{"type", "leaderboard"}, {"entries", arr}}.dump());
+                return;
+            }
+
             if (type == "snapshot")
             {
                 std::string token = msg.value("token", "");
