@@ -380,6 +380,36 @@ private:
                 return;
             }
 
+            if (type == "my_trades")
+            {
+                std::string token = msg.value("token", "");
+                if (!token.empty())
+                {
+                    auto res = db_.validate_session(token);
+                    if (res.ok) current_user_id_ = res.id;
+                }
+                if (current_user_id_ == -1)
+                {
+                    send(json{{"type", "error"}, {"message", "Not logged in."}}.dump());
+                    return;
+                }
+                auto rows = db_.get_user_trades(current_user_id_, 50);
+                json arr = json::array();
+                for (const auto &r : rows)
+                {
+                    arr.push_back({
+                        {"company_id", r.company_id},
+                        {"buyer_id",   r.buyer_id},
+                        {"seller_id",  r.seller_id},
+                        {"price",      r.price},
+                        {"quantity",   r.quantity},
+                        {"ts",         r.ts}
+                    });
+                }
+                send(json{{"type", "my_trades"}, {"trades", arr}}.dump());
+                return;
+            }
+
             if (type == "cancel")
             {
                 if (!msg.contains("order_id"))
@@ -514,7 +544,8 @@ public:
     {
         DB_SETTLE = 0,
         DB_REFUND_CASH = 1,
-        DB_REFUND_SHARES = 2
+        DB_REFUND_SHARES = 2,
+        DB_LOG_TRADE = 3
     };
 
 #pragma pack(push, 1)
@@ -585,6 +616,14 @@ public:
                                        t.buyer_limit_price,
                                        t.company_id,
                                        DB_SETTLE,
+                                       {0}});
+            db_queue_front_.push_back({t.buyer_user_id,
+                                       t.seller_user_id,
+                                       t.quantity,
+                                       t.price,
+                                       0,
+                                       t.company_id,
+                                       DB_LOG_TRADE,
                                        {0}});
         }
         db_q_cv_.notify_one();
@@ -750,6 +789,10 @@ private:
                     {
                         db_.release_shares(task.buyer_id, task.company_id, task.quantity);
                         affected_users.insert(task.buyer_id);
+                    }
+                    else if (task.type == DB_LOG_TRADE)
+                    {
+                        db_.log_trade_unlocked(task.company_id, task.buyer_id, task.seller_id, task.price, task.quantity);
                     }
                 }
 
