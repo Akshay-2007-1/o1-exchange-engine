@@ -405,6 +405,83 @@ private:
                 return;
             }
 
+            if (type == "market_order")
+            {
+                if (!msg.contains("quantity") || !msg.contains("side") || !msg.contains("timestamp"))
+                {
+                    send(json{{"type", "error"}, {"message", "Missing required fields for market order."}}.dump());
+                    return;
+                }
+                std::string token = msg.value("token", "");
+                auto session_result = db_.validate_session(token);
+                if (!session_result.ok)
+                {
+                    send(json{{"type", "error"}, {"message", "Authentication required."}}.dump());
+                    return;
+                }
+                int64_t user_id = session_result.id;
+                current_user_id_ = user_id;
+
+                const uint16_t company_id = msg.value("company_id", default_company_id_);
+                const bool side = (msg["side"] == "BUY");
+                const uint32_t quantity = msg["quantity"].get<uint32_t>();
+                const uint64_t timestamp = msg["timestamp"].get<uint64_t>();
+
+                InstrumentState *inst = market_.find_instrument(company_id);
+                if (!inst)
+                {
+                    send(json{{"type", "error"}, {"message", "Unknown instrument."}}.dump());
+                    return;
+                }
+
+                if (side)
+                {
+                    uint32_t ref_price = inst->book.best_ask();
+                    if (ref_price == NULL_IDX)
+                    {
+                        send(json{{"type", "error"}, {"message", "No asks in book — market buy cannot execute."}}.dump());
+                        return;
+                    }
+                    double required_cash = (static_cast<double>(ref_price) / 100.0) * quantity;
+                    auto check = db_.reserve_cash(user_id, required_cash);
+                    if (!check.ok)
+                    {
+                        send(json{{"type", "error"}, {"message", check.error}}.dump());
+                        return;
+                    }
+                    EngineTask task;
+                    task.type = EngineTask::ORDER;
+                    task.company_id = company_id;
+                    task.order.user_id = user_id;
+                    task.order.company_id = company_id;
+                    task.order.side = true;
+                    task.order.price = 99999; // sweep full ask side
+                    task.order.quantity = quantity;
+                    task.order.timestamp = timestamp;
+                    while (!engine_queue_.push(task)) std::this_thread::yield();
+                }
+                else
+                {
+                    auto check = db_.reserve_shares(user_id, company_id, quantity);
+                    if (!check.ok)
+                    {
+                        send(json{{"type", "error"}, {"message", check.error}}.dump());
+                        return;
+                    }
+                    EngineTask task;
+                    task.type = EngineTask::ORDER;
+                    task.company_id = company_id;
+                    task.order.user_id = user_id;
+                    task.order.company_id = company_id;
+                    task.order.side = false;
+                    task.order.price = 1; // sweep full bid side
+                    task.order.quantity = quantity;
+                    task.order.timestamp = timestamp;
+                    while (!engine_queue_.push(task)) std::this_thread::yield();
+                }
+                return;
+            }
+
             if (type == "order")
             {
                 if (!msg.contains("price") || !msg.contains("quantity") || !msg.contains("side") || !msg.contains("timestamp"))
