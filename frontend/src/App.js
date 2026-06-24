@@ -810,17 +810,34 @@ export default function App() {
                   </select>
                 </label>
 
-                <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", cursor: "pointer" }}>
-                  <input
-                    type="checkbox"
-                    checked={form.isMarket}
-                    onChange={e => {
-                      setForm(current => ({ ...current, isMarket: e.target.checked, price: "" }));
-                      setPriceError("");
-                    }}
-                  />
+                <div
+                  onClick={() => {
+                    setForm(current => ({ ...current, isMarket: !current.isMarket, price: "" }));
+                    setPriceError("");
+                  }}
+                  style={{
+                    display: "flex", alignItems: "center", gap: "0.6rem",
+                    cursor: "pointer", userSelect: "none",
+                    padding: "0.35rem 0.6rem",
+                    borderRadius: "6px",
+                    border: `1px solid ${form.isMarket ? "var(--buy, #26a69a)" : "var(--border, #333)"}`,
+                    background: form.isMarket ? "rgba(38,166,154,0.1)" : "transparent",
+                    transition: "all 0.15s ease",
+                    fontSize: "0.82rem",
+                    color: form.isMarket ? "var(--buy, #26a69a)" : "var(--muted, #888)"
+                  }}
+                >
+                  <span style={{
+                    width: "14px", height: "14px", borderRadius: "3px",
+                    border: `1.5px solid ${form.isMarket ? "var(--buy, #26a69a)" : "var(--muted, #888)"}`,
+                    background: form.isMarket ? "var(--buy, #26a69a)" : "transparent",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    flexShrink: 0, transition: "all 0.15s ease"
+                  }}>
+                    {form.isMarket && <span style={{ color: "#fff", fontSize: "10px", lineHeight: 1 }}>✓</span>}
+                  </span>
                   Market order
-                </label>
+                </div>
 
                 {!form.isMarket && (
                   <label>

@@ -455,13 +455,20 @@ private:
                     task.order.user_id = user_id;
                     task.order.company_id = company_id;
                     task.order.side = true;
-                    task.order.price = 99999; // sweep full ask side
+                    task.order.price = ref_price;
                     task.order.quantity = quantity;
                     task.order.timestamp = timestamp;
+                    task.session = shared_from_this();
                     while (!engine_queue_.push(task)) std::this_thread::yield();
                 }
                 else
                 {
+                    uint32_t ref_price = inst->book.best_bid();
+                    if (ref_price == NULL_IDX)
+                    {
+                        send(json{{"type", "error"}, {"message", "No bids in book — market sell cannot execute."}}.dump());
+                        return;
+                    }
                     auto check = db_.reserve_shares(user_id, company_id, quantity);
                     if (!check.ok)
                     {
@@ -474,9 +481,10 @@ private:
                     task.order.user_id = user_id;
                     task.order.company_id = company_id;
                     task.order.side = false;
-                    task.order.price = 1; // sweep full bid side
+                    task.order.price = ref_price;
                     task.order.quantity = quantity;
                     task.order.timestamp = timestamp;
+                    task.session = shared_from_this();
                     while (!engine_queue_.push(task)) std::this_thread::yield();
                 }
                 return;
