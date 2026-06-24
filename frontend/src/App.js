@@ -421,7 +421,8 @@ export default function App() {
             );
             if (matched) {
               const side = Number(matched.id) === trade.buy_order_id ? "BUY" : "SELL";
-              showToast(`${side} filled: ${formatQuantity(trade.quantity)} @ $${formatPrice(trade.price)}`);
+              const toastMsg = `${side} filled: ${formatQuantity(trade.quantity)} @ $${formatPrice(trade.price)}`;
+              setTimeout(() => showToast(toastMsg), 0);
             }
             return prev;
           });
