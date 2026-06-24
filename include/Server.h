@@ -464,6 +464,7 @@ private:
                 task.order.price = price;
                 task.order.quantity = quantity;
                 task.order.timestamp = timestamp;
+                task.session = shared_from_this();
 
                 while (!engine_queue_.push(task))
                     std::this_thread::yield();
