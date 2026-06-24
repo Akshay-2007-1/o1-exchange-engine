@@ -404,6 +404,7 @@ export default function App() {
       setConnected(true);
       setMarketReady(false);
       setLastError("");
+      setPriceHistory({});
       reconnectAttemptsRef.current = 0;
 
       const savedUser = localStorage.getItem("exchange_user");
