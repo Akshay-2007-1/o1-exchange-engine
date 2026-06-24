@@ -456,6 +456,9 @@ export default function App() {
         if (msg.type === "user_update") {
           setCash(msg.cash);
           setPortfolio(msg.portfolio || []);
+          const token = userRef.current?.token;
+          if (token && socket.readyState === WebSocket.OPEN)
+            socket.send(JSON.stringify({ type: "my_trades", token }));
         }
 
         if (msg.type === "history") {
