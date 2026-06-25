@@ -367,6 +367,24 @@ private:
                 return;
             }
 
+            if (type == "leaderboard")
+            {
+                auto rows = db_.get_leaderboard(20);
+                json arr = json::array();
+                int rank = 1;
+                for (const auto &r : rows)
+                {
+                    arr.push_back({
+                        {"rank",         rank++},
+                        {"username",     r.username},
+                        {"cash",         r.cash},
+                        {"total_shares", r.total_shares}
+                    });
+                }
+                send(json{{"type", "leaderboard"}, {"entries", arr}}.dump());
+                return;
+            }
+
             if (type == "snapshot")
             {
                 std::string token = msg.value("token", "");
@@ -377,6 +395,36 @@ private:
                         current_user_id_ = res.id;
                 }
                 request_snapshot(msg.value("company_id", default_company_id_));
+                return;
+            }
+
+            if (type == "my_trades")
+            {
+                std::string token = msg.value("token", "");
+                if (!token.empty())
+                {
+                    auto res = db_.validate_session(token);
+                    if (res.ok) current_user_id_ = res.id;
+                }
+                if (current_user_id_ == -1)
+                {
+                    send(json{{"type", "error"}, {"message", "Not logged in."}}.dump());
+                    return;
+                }
+                auto rows = db_.get_user_trades(current_user_id_, 50);
+                json arr = json::array();
+                for (const auto &r : rows)
+                {
+                    arr.push_back({
+                        {"company_id", r.company_id},
+                        {"buyer_id",   r.buyer_id},
+                        {"seller_id",  r.seller_id},
+                        {"price",      r.price},
+                        {"quantity",   r.quantity},
+                        {"ts",         r.ts}
+                    });
+                }
+                send(json{{"type", "my_trades"}, {"trades", arr}}.dump());
                 return;
             }
 
@@ -402,6 +450,91 @@ private:
                 task.user_id = session_result.id;
                 while (!engine_queue_.push(task))
                     std::this_thread::yield();
+                return;
+            }
+
+            if (type == "market_order")
+            {
+                if (!msg.contains("quantity") || !msg.contains("side") || !msg.contains("timestamp"))
+                {
+                    send(json{{"type", "error"}, {"message", "Missing required fields for market order."}}.dump());
+                    return;
+                }
+                std::string token = msg.value("token", "");
+                auto session_result = db_.validate_session(token);
+                if (!session_result.ok)
+                {
+                    send(json{{"type", "error"}, {"message", "Authentication required."}}.dump());
+                    return;
+                }
+                int64_t user_id = session_result.id;
+                current_user_id_ = user_id;
+
+                const uint16_t company_id = msg.value("company_id", default_company_id_);
+                const bool side = (msg["side"] == "BUY");
+                const uint32_t quantity = msg["quantity"].get<uint32_t>();
+                const uint64_t timestamp = msg["timestamp"].get<uint64_t>();
+
+                InstrumentState *inst = market_.find_instrument(company_id);
+                if (!inst)
+                {
+                    send(json{{"type", "error"}, {"message", "Unknown instrument."}}.dump());
+                    return;
+                }
+
+                if (side)
+                {
+                    uint32_t ref_price = inst->book.best_ask();
+                    if (ref_price == NULL_IDX)
+                    {
+                        send(json{{"type", "error"}, {"message", "No asks in book — market buy cannot execute."}}.dump());
+                        return;
+                    }
+                    double required_cash = (static_cast<double>(ref_price) / 100.0) * quantity;
+                    auto check = db_.reserve_cash(user_id, required_cash);
+                    if (!check.ok)
+                    {
+                        send(json{{"type", "error"}, {"message", check.error}}.dump());
+                        return;
+                    }
+                    EngineTask task;
+                    task.type = EngineTask::ORDER;
+                    task.company_id = company_id;
+                    task.order.user_id = user_id;
+                    task.order.company_id = company_id;
+                    task.order.side = true;
+                    task.order.price = ref_price;
+                    task.order.quantity = quantity;
+                    task.order.timestamp = timestamp;
+                    task.session = shared_from_this();
+                    while (!engine_queue_.push(task)) std::this_thread::yield();
+                }
+                else
+                {
+                    uint32_t ref_price = inst->book.best_bid();
+                    if (ref_price == NULL_IDX)
+                    {
+                        send(json{{"type", "error"}, {"message", "No bids in book — market sell cannot execute."}}.dump());
+                        return;
+                    }
+                    auto check = db_.reserve_shares(user_id, company_id, quantity);
+                    if (!check.ok)
+                    {
+                        send(json{{"type", "error"}, {"message", check.error}}.dump());
+                        return;
+                    }
+                    EngineTask task;
+                    task.type = EngineTask::ORDER;
+                    task.company_id = company_id;
+                    task.order.user_id = user_id;
+                    task.order.company_id = company_id;
+                    task.order.side = false;
+                    task.order.price = ref_price;
+                    task.order.quantity = quantity;
+                    task.order.timestamp = timestamp;
+                    task.session = shared_from_this();
+                    while (!engine_queue_.push(task)) std::this_thread::yield();
+                }
                 return;
             }
 
@@ -464,6 +597,7 @@ private:
                 task.order.price = price;
                 task.order.quantity = quantity;
                 task.order.timestamp = timestamp;
+                task.session = shared_from_this();
 
                 while (!engine_queue_.push(task))
                     std::this_thread::yield();
@@ -514,7 +648,8 @@ public:
     {
         DB_SETTLE = 0,
         DB_REFUND_CASH = 1,
-        DB_REFUND_SHARES = 2
+        DB_REFUND_SHARES = 2,
+        DB_LOG_TRADE = 3
     };
 
 #pragma pack(push, 1)
@@ -586,6 +721,14 @@ public:
                                        t.company_id,
                                        DB_SETTLE,
                                        {0}});
+            db_queue_front_.push_back({t.buyer_user_id,
+                                       t.seller_user_id,
+                                       t.quantity,
+                                       t.price,
+                                       0,
+                                       t.company_id,
+                                       DB_LOG_TRADE,
+                                       {0}});
         }
         db_q_cv_.notify_one();
     }
@@ -620,9 +763,25 @@ private:
 
                 if (task.type == EngineTask::ORDER)
                 {
-                    if (instrument->book.can_process_order(task.order)) [[likely]]
+                    if (!instrument->book.can_process_order(task.order))
                     {
-                        uint32_t rejected_qty = task.order.quantity;
+                        {
+                            std::lock_guard<std::mutex> q_lock(db_q_mutex_);
+                            if (task.order.side)
+                                db_queue_front_.push_back({task.order.user_id, 0, task.order.quantity, task.order.price, 0, task.company_id, DB_REFUND_CASH, {0}});
+                            else
+                                db_queue_front_.push_back({task.order.user_id, 0, task.order.quantity, 0, 0, task.company_id, DB_REFUND_SHARES, {0}});
+                        }
+                        db_q_cv_.notify_one();
+
+                        if (task.session)
+                            task.session->send(json{{"type", "error"}, {"message", "Order rejected: exchange capacity limit reached."}}.dump());
+                    }
+                    else [[likely]]
+                    {
+                        uint32_t rejected_qty = task.order.side
+                            ? instrument->book.process_buy_order(task.order)
+                            : instrument->book.process_sell_order(task.order);
 
                         registry_.broadcast(book_to_json(*instrument).dump());
 
@@ -631,45 +790,15 @@ private:
                             {
                                 std::lock_guard<std::mutex> q_lock(db_q_mutex_);
                                 if (task.order.side)
-                                {
                                     db_queue_front_.push_back({task.order.user_id, 0, rejected_qty, task.order.price, 0, task.company_id, DB_REFUND_CASH, {0}});
-                                }
                                 else
-                                {
                                     db_queue_front_.push_back({task.order.user_id, 0, rejected_qty, 0, 0, task.company_id, DB_REFUND_SHARES, {0}});
-                                }
                             }
                             db_q_cv_.notify_one();
 
                             if (task.session)
-                            {
                                 task.session->send(json{{"type", "error"}, {"message", "Order partially cancelled due to self-trade prevention."}}.dump());
-                            }
                         }
-                    }
-                    else
-                    {
-                        if (task.order.side)
-                        {
-                            uint32_t rejected_qty = instrument->book.process_buy_order(task.order);
-                            {
-                                std::lock_guard<std::mutex> q_lock(db_q_mutex_);
-                                db_queue_front_.push_back({task.order.user_id, 0, task.order.quantity, task.order.price, 0, task.company_id, DB_REFUND_CASH, {0}});
-                            }
-                        }
-                        else
-                        {
-                            uint32_t rejected_qty = instrument->book.process_sell_order(task.order);
-                            {
-                                std::lock_guard<std::mutex> q_lock(db_q_mutex_);
-                                db_queue_front_.push_back({task.order.user_id, 0, task.order.quantity, 0, 0, task.company_id, DB_REFUND_SHARES, {0}});
-                            }
-                        }
-
-                        db_q_cv_.notify_one();
-
-                        if (task.session)
-                            task.session->send(json{{"type", "error"}, {"message", "Order rejected: exchange capacity limit reached."}}.dump());
                     }
                 }
                 else if (task.type == EngineTask::CANCEL)
@@ -750,6 +879,10 @@ private:
                     {
                         db_.release_shares(task.buyer_id, task.company_id, task.quantity);
                         affected_users.insert(task.buyer_id);
+                    }
+                    else if (task.type == DB_LOG_TRADE)
+                    {
+                        db_.log_trade_unlocked(task.company_id, task.buyer_id, task.seller_id, task.price, task.quantity);
                     }
                 }
 
