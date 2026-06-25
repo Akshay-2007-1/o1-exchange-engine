@@ -258,6 +258,31 @@ function TradeFeed({ trades, companies }) {
   );
 }
 
+function ToastStack({ toasts }) {
+  if (toasts.length === 0) return null;
+  return (
+    <div style={{
+      position: "fixed", bottom: "1.5rem", right: "1.5rem",
+      display: "flex", flexDirection: "column", gap: "0.5rem", zIndex: 1000
+    }}>
+      {toasts.map(t => (
+        <div key={t.id} style={{
+          background: "var(--panel-bg, #1e1e2e)",
+          border: "1px solid var(--buy, #26a69a)",
+          color: "var(--text, #cdd6f4)",
+          padding: "0.6rem 1rem",
+          borderRadius: "6px",
+          fontSize: "0.85rem",
+          boxShadow: "0 2px 12px rgba(0,0,0,0.4)",
+          animation: "fadeInUp 0.2s ease"
+        }}>
+          ✓ {t.msg}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function LeaderboardPanel({ entries, currentUsername }) {
   return (
     <section className="panel">
@@ -421,9 +446,16 @@ export default function App() {
   const shouldReconnectRef = useRef(true);
 
   const [myOrdersByCompany, setMyOrdersByCompany] = useState({});
+  const [toasts, setToasts] = useState([]);
   const [leaderboard, setLeaderboard] = useState([]);
   const [priceHistory, setPriceHistory] = useState({});
   const [myTrades, setMyTrades] = useState([]);
+
+  const showToast = (msg, kind = "fill") => {
+    const id = Date.now() + Math.random();
+    setToasts(prev => [...prev, { id, msg, kind }]);
+    setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 4000);
+  };
 
   const applyBookSnapshot = useCallback(msg => {
     const book = normalizedBook(msg);
@@ -518,6 +550,20 @@ export default function App() {
             const cid = trade.company_id;
             const existing = prev[cid] || [];
             return { ...prev, [cid]: [...existing, trade.price].slice(-60) };
+          });
+
+          // check if this fill involves one of the current user's orders
+          setMyOrdersByCompany(prev => {
+            const allOrders = Object.values(prev).flatMap(c => [...(c.buys || []), ...(c.sells || [])]);
+            const matched = allOrders.find(
+              o => Number(o.id) === trade.buy_order_id || Number(o.id) === trade.sell_order_id
+            );
+            if (matched) {
+              const side = Number(matched.id) === trade.buy_order_id ? "BUY" : "SELL";
+              const toastMsg = `${side} filled: ${formatQuantity(trade.quantity)} @ $${formatPrice(trade.price)}`;
+              setTimeout(() => showToast(toastMsg), 0);
+            }
+            return prev;
           });
         }
         return;
@@ -1067,6 +1113,7 @@ export default function App() {
         <MyOrdersPanel orders={myOpenOrders} onCancel={cancelOrder} companies={companies} />
         <MyTradesPanel trades={myTrades} userId={user?.userId} companies={companies} />
       </div>
+      <ToastStack toasts={toasts} />
     </main>
   );
 }
