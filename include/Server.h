@@ -464,6 +464,7 @@ private:
                 task.order.price = price;
                 task.order.quantity = quantity;
                 task.order.timestamp = timestamp;
+                task.session = shared_from_this();
 
                 while (!engine_queue_.push(task))
                     std::this_thread::yield();
@@ -620,9 +621,25 @@ private:
 
                 if (task.type == EngineTask::ORDER)
                 {
-                    if (instrument->book.can_process_order(task.order)) [[likely]]
+                    if (!instrument->book.can_process_order(task.order))
                     {
-                        uint32_t rejected_qty = task.order.quantity;
+                        {
+                            std::lock_guard<std::mutex> q_lock(db_q_mutex_);
+                            if (task.order.side)
+                                db_queue_front_.push_back({task.order.user_id, 0, task.order.quantity, task.order.price, 0, task.company_id, DB_REFUND_CASH, {0}});
+                            else
+                                db_queue_front_.push_back({task.order.user_id, 0, task.order.quantity, 0, 0, task.company_id, DB_REFUND_SHARES, {0}});
+                        }
+                        db_q_cv_.notify_one();
+
+                        if (task.session)
+                            task.session->send(json{{"type", "error"}, {"message", "Order rejected: exchange capacity limit reached."}}.dump());
+                    }
+                    else [[likely]]
+                    {
+                        uint32_t rejected_qty = task.order.side
+                            ? instrument->book.process_buy_order(task.order)
+                            : instrument->book.process_sell_order(task.order);
 
                         registry_.broadcast(book_to_json(*instrument).dump());
 
@@ -631,45 +648,15 @@ private:
                             {
                                 std::lock_guard<std::mutex> q_lock(db_q_mutex_);
                                 if (task.order.side)
-                                {
                                     db_queue_front_.push_back({task.order.user_id, 0, rejected_qty, task.order.price, 0, task.company_id, DB_REFUND_CASH, {0}});
-                                }
                                 else
-                                {
                                     db_queue_front_.push_back({task.order.user_id, 0, rejected_qty, 0, 0, task.company_id, DB_REFUND_SHARES, {0}});
-                                }
                             }
                             db_q_cv_.notify_one();
 
                             if (task.session)
-                            {
                                 task.session->send(json{{"type", "error"}, {"message", "Order partially cancelled due to self-trade prevention."}}.dump());
-                            }
                         }
-                    }
-                    else
-                    {
-                        if (task.order.side)
-                        {
-                            uint32_t rejected_qty = instrument->book.process_buy_order(task.order);
-                            {
-                                std::lock_guard<std::mutex> q_lock(db_q_mutex_);
-                                db_queue_front_.push_back({task.order.user_id, 0, task.order.quantity, task.order.price, 0, task.company_id, DB_REFUND_CASH, {0}});
-                            }
-                        }
-                        else
-                        {
-                            uint32_t rejected_qty = instrument->book.process_sell_order(task.order);
-                            {
-                                std::lock_guard<std::mutex> q_lock(db_q_mutex_);
-                                db_queue_front_.push_back({task.order.user_id, 0, task.order.quantity, 0, 0, task.company_id, DB_REFUND_SHARES, {0}});
-                            }
-                        }
-
-                        db_q_cv_.notify_one();
-
-                        if (task.session)
-                            task.session->send(json{{"type", "error"}, {"message", "Order rejected: exchange capacity limit reached."}}.dump());
                     }
                 }
                 else if (task.type == EngineTask::CANCEL)
