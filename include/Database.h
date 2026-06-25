@@ -274,6 +274,74 @@ public:
         sqlite3_reset(stmt_commit_);
     }
 
+    struct LeaderboardEntry {
+        int64_t     user_id;
+        std::string username;
+        double      cash;
+        int64_t     total_shares;
+    };
+
+    std::vector<LeaderboardEntry> get_leaderboard(int limit = 20) {
+        std::vector<LeaderboardEntry> rows;
+        std::lock_guard<std::mutex> lock(db_mutex_);
+        sqlite3_clear_bindings(stmt_leaderboard_);
+        sqlite3_bind_int(stmt_leaderboard_, 1, limit);
+        while (sqlite3_step(stmt_leaderboard_) == SQLITE_ROW) {
+            LeaderboardEntry e;
+            e.user_id     = sqlite3_column_int64(stmt_leaderboard_, 0);
+            const char* name = reinterpret_cast<const char*>(sqlite3_column_text(stmt_leaderboard_, 1));
+            e.username    = name ? name : "";
+            e.cash        = sqlite3_column_double(stmt_leaderboard_, 2);
+            e.total_shares = sqlite3_column_int64(stmt_leaderboard_, 3);
+            rows.push_back(e);
+        }
+        sqlite3_reset(stmt_leaderboard_);
+        return rows;
+    }
+
+    struct TradeRow {
+        uint16_t company_id;
+        int64_t  buyer_id;
+        int64_t  seller_id;
+        uint32_t price;
+        uint32_t quantity;
+        int64_t  ts;
+    };
+
+    void log_trade_unlocked(uint16_t company_id, int64_t buyer_id, int64_t seller_id, uint32_t price, uint32_t quantity) {
+        int64_t now = static_cast<int64_t>(std::time(nullptr));
+        sqlite3_clear_bindings(stmt_log_trade_);
+        sqlite3_bind_int(stmt_log_trade_,  1, company_id);
+        sqlite3_bind_int64(stmt_log_trade_, 2, buyer_id);
+        sqlite3_bind_int64(stmt_log_trade_, 3, seller_id);
+        sqlite3_bind_int(stmt_log_trade_,  4, price);
+        sqlite3_bind_int(stmt_log_trade_,  5, quantity);
+        sqlite3_bind_int64(stmt_log_trade_, 6, now);
+        sqlite3_step(stmt_log_trade_);
+        sqlite3_reset(stmt_log_trade_);
+    }
+
+    std::vector<TradeRow> get_user_trades(int64_t user_id, int limit = 50) {
+        std::vector<TradeRow> rows;
+        std::lock_guard<std::mutex> lock(db_mutex_);
+        sqlite3_clear_bindings(stmt_get_user_trades_);
+        sqlite3_bind_int64(stmt_get_user_trades_, 1, user_id);
+        sqlite3_bind_int64(stmt_get_user_trades_, 2, user_id);
+        sqlite3_bind_int(stmt_get_user_trades_,  3, limit);
+        while (sqlite3_step(stmt_get_user_trades_) == SQLITE_ROW) {
+            TradeRow r;
+            r.company_id = static_cast<uint16_t>(sqlite3_column_int(stmt_get_user_trades_, 0));
+            r.buyer_id   = sqlite3_column_int64(stmt_get_user_trades_, 1);
+            r.seller_id  = sqlite3_column_int64(stmt_get_user_trades_, 2);
+            r.price      = static_cast<uint32_t>(sqlite3_column_int(stmt_get_user_trades_, 3));
+            r.quantity   = static_cast<uint32_t>(sqlite3_column_int(stmt_get_user_trades_, 4));
+            r.ts         = sqlite3_column_int64(stmt_get_user_trades_, 5);
+            rows.push_back(r);
+        }
+        sqlite3_reset(stmt_get_user_trades_);
+        return rows;
+    }
+
     void release_cash(int64_t user_id, double amount) {
         std::lock_guard<std::mutex> lock(db_mutex_);
         sqlite3_clear_bindings(stmt_settle_cash_);
@@ -312,6 +380,9 @@ private:
     sqlite3_stmt* stmt_res_shares_ = nullptr;
     sqlite3_stmt* stmt_settle_shares_ = nullptr;
     sqlite3_stmt* stmt_settle_cash_ = nullptr;
+    sqlite3_stmt* stmt_leaderboard_ = nullptr;
+    sqlite3_stmt* stmt_log_trade_ = nullptr;
+    sqlite3_stmt* stmt_get_user_trades_ = nullptr;
 
     void initialise() {
         // High-performance SQLite pragmas
@@ -347,6 +418,16 @@ private:
                 expires_at INTEGER NOT NULL,
                 FOREIGN KEY (user_id) REFERENCES users(id)
             );
+
+            CREATE TABLE IF NOT EXISTS trades (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                company_id INTEGER NOT NULL,
+                buyer_id   INTEGER NOT NULL,
+                seller_id  INTEGER NOT NULL,
+                price      INTEGER NOT NULL,
+                quantity   INTEGER NOT NULL,
+                ts         INTEGER NOT NULL
+            );
         )";
 
         char* err = nullptr;
@@ -373,6 +454,17 @@ private:
         
         sqlite3_prepare_v2(db_, "INSERT INTO portfolios (user_id, company_id, shares) VALUES (?, ?, ?) ON CONFLICT (user_id, company_id) DO UPDATE SET shares = shares + excluded.shares;", -1, &stmt_settle_shares_, nullptr);
         sqlite3_prepare_v2(db_, "UPDATE balances SET cash = cash + ? WHERE user_id = ?;", -1, &stmt_settle_cash_, nullptr);
+        sqlite3_prepare_v2(db_,
+            "SELECT u.id, u.username, b.cash, COALESCE(SUM(p.shares), 0) as total_shares "
+            "FROM users u "
+            "JOIN balances b ON b.user_id = u.id "
+            "LEFT JOIN portfolios p ON p.user_id = u.id "
+            "GROUP BY u.id "
+            "ORDER BY b.cash DESC "
+            "LIMIT ?;",
+            -1, &stmt_leaderboard_, nullptr);
+        sqlite3_prepare_v2(db_, "INSERT INTO trades (company_id, buyer_id, seller_id, price, quantity, ts) VALUES (?,?,?,?,?,?);", -1, &stmt_log_trade_, nullptr);
+        sqlite3_prepare_v2(db_, "SELECT company_id, buyer_id, seller_id, price, quantity, ts FROM trades WHERE buyer_id = ? OR seller_id = ? ORDER BY ts DESC, id DESC LIMIT ?;", -1, &stmt_get_user_trades_, nullptr);
     }
 
     void finalize_statements() {
@@ -390,6 +482,9 @@ private:
         sqlite3_finalize(stmt_res_shares_);
         sqlite3_finalize(stmt_settle_shares_);
         sqlite3_finalize(stmt_settle_cash_);
+        sqlite3_finalize(stmt_leaderboard_);
+        sqlite3_finalize(stmt_log_trade_);
+        sqlite3_finalize(stmt_get_user_trades_);
     }
 
     std::string generate_token() {
