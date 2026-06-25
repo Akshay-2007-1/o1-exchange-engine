@@ -281,6 +281,9 @@ public:
         return snaps;
     }
 
+    uint32_t best_bid() const { return get_best_bid(); }
+    uint32_t best_ask() const { return get_best_ask(); }
+
     std::vector<OrderSnapshot> ask_orders(std::size_t limit = 100) const
     {
         std::vector<OrderSnapshot> snaps;

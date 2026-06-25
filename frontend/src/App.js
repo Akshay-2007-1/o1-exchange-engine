@@ -372,7 +372,7 @@ export default function App() {
   const [asks, setAsks] = useState([]);
   const [buyOrders, setBuyOrders] = useState([]);
   const [sellOrders, setSellOrders] = useState([]);
-  const [form, setForm] = useState({ side: "BUY", price: "", quantity: "" });
+  const [form, setForm] = useState({ side: "BUY", price: "", quantity: "", isMarket: false });
   const [priceError, setPriceError] = useState("");
   const [quantityError, setQuantityError] = useState("");
   const [lastError, setLastError] = useState("");
@@ -653,31 +653,43 @@ export default function App() {
       return;
     }
 
-    if (!form.price || !form.quantity) {
-      validatePrice(form.price);
-      validateQuantity(form.quantity);
-      setLastError("Enter both price and quantity.");
-      return;
-    }
-
-    const priceValid = validatePrice(form.price);
     const quantityValid = validateQuantity(form.quantity);
-
-    if (!priceValid || !quantityValid) {
+    if (!form.quantity || !quantityValid) {
+      validateQuantity(form.quantity);
+      setLastError("Enter a quantity.");
       return;
     }
 
-    const order = {
-      type: "order",
-      token: user?.token,
-      company_id: selectedCompanyId,
-      side: form.side,
-      price: Math.round(parseFloat(form.price) * 100),
-      quantity: parseInt(form.quantity, 10),
-      timestamp: Date.now()
-    };
+    if (!form.isMarket) {
+      const priceValid = validatePrice(form.price);
+      if (!form.price || !priceValid) {
+        validatePrice(form.price);
+        setLastError("Enter a price for limit orders.");
+        return;
+      }
+    }
 
-    ws.current.send(JSON.stringify(order));
+    if (form.isMarket) {
+      ws.current.send(JSON.stringify({
+        type: "market_order",
+        token: user?.token,
+        company_id: selectedCompanyId,
+        side: form.side,
+        quantity: parseInt(form.quantity, 10),
+        timestamp: Date.now()
+      }));
+    } else {
+      ws.current.send(JSON.stringify({
+        type: "order",
+        token: user?.token,
+        company_id: selectedCompanyId,
+        side: form.side,
+        price: Math.round(parseFloat(form.price) * 100),
+        quantity: parseInt(form.quantity, 10),
+        timestamp: Date.now()
+      }));
+    }
+
     setForm(current => ({ ...current, price: "", quantity: "" }));
     setPriceError("");
     setQuantityError("");
@@ -885,7 +897,7 @@ export default function App() {
               <section className="panel order-ticket">
               <div className="panel-heading">
                 <h2>Order Ticket</h2>
-                <span>Limit order</span>
+                <span>{form.isMarket ? "Market order" : "Limit order"}</span>
               </div>
 
               <form onSubmit={submitOrder}>
@@ -913,24 +925,55 @@ export default function App() {
                   </select>
                 </label>
 
-                <label>
-                  Price
-                  <input
-                    type="number"
-                    min="0.01"
-                    max="999.99"
-                    step="0.01"
-                    inputMode="decimal"
-                    placeholder="102.50"
-                    value={form.price}
-                    onChange={event => {
-                      const value = event.target.value;
-                      setForm(current => ({ ...current, price: value }));
-                      validatePrice(value);
-                    }}
-                  />
-                  {priceError && <span className="error-text">{priceError}</span>}
-                </label>
+                <div
+                  onClick={() => {
+                    setForm(current => ({ ...current, isMarket: !current.isMarket, price: "" }));
+                    setPriceError("");
+                  }}
+                  style={{
+                    display: "flex", alignItems: "center", gap: "0.6rem",
+                    cursor: "pointer", userSelect: "none",
+                    padding: "0.35rem 0.6rem",
+                    borderRadius: "6px",
+                    border: `1px solid ${form.isMarket ? "var(--buy, #26a69a)" : "var(--border, #333)"}`,
+                    background: form.isMarket ? "rgba(38,166,154,0.1)" : "transparent",
+                    transition: "all 0.15s ease",
+                    fontSize: "0.82rem",
+                    color: form.isMarket ? "var(--buy, #26a69a)" : "var(--muted, #888)"
+                  }}
+                >
+                  <span style={{
+                    width: "14px", height: "14px", borderRadius: "3px",
+                    border: `1.5px solid ${form.isMarket ? "var(--buy, #26a69a)" : "var(--muted, #888)"}`,
+                    background: form.isMarket ? "var(--buy, #26a69a)" : "transparent",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    flexShrink: 0, transition: "all 0.15s ease"
+                  }}>
+                    {form.isMarket && <span style={{ color: "#fff", fontSize: "10px", lineHeight: 1 }}>✓</span>}
+                  </span>
+                  Market order
+                </div>
+
+                {!form.isMarket && (
+                  <label>
+                    Price
+                    <input
+                      type="number"
+                      min="0.01"
+                      max="999.99"
+                      step="0.01"
+                      inputMode="decimal"
+                      placeholder="102.50"
+                      value={form.price}
+                      onChange={event => {
+                        const value = event.target.value;
+                        setForm(current => ({ ...current, price: value }));
+                        validatePrice(value);
+                      }}
+                    />
+                    {priceError && <span className="error-text">{priceError}</span>}
+                  </label>
+                )}
 
                 <label>
                   Quantity
@@ -954,7 +997,7 @@ export default function App() {
                 {lastError && <p className="error-text">{lastError}</p>}
 
                 <button className={`submit-order ${form.side.toLowerCase()}`} type="submit">
-                  Send {form.side} Order
+                  {form.isMarket ? `Market ${form.side}` : `Limit ${form.side}`}
                 </button>
               </form>
               </section>
