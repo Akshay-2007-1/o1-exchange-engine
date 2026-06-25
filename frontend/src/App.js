@@ -258,6 +258,41 @@ function TradeFeed({ trades, companies }) {
   );
 }
 
+function LeaderboardPanel({ entries, currentUsername }) {
+  return (
+    <section className="panel">
+      <div className="panel-heading">
+        <h2>Leaderboard</h2>
+        <span>by cash balance</span>
+      </div>
+      <div className="my-orders-header">
+        <span>#</span>
+        <span>User</span>
+        <span>Cash</span>
+        <span>Shares held</span>
+      </div>
+      <div className="my-orders-list">
+        {entries.length === 0 ? (
+          <div className="empty-state">No traders yet</div>
+        ) : (
+          entries.map(e => (
+            <div
+              className="my-order-row"
+              key={e.rank}
+              style={e.username === currentUsername ? { background: "rgba(255,255,255,0.04)" } : {}}
+            >
+              <span style={{ color: e.rank === 1 ? "#ffd700" : "var(--muted)" }}>#{e.rank}</span>
+              <span style={{ fontWeight: e.username === currentUsername ? 600 : 400 }}>{e.username}</span>
+              <span style={{ color: "var(--buy)" }}>${currency.format(e.cash)}</span>
+              <span style={{ color: "var(--muted)" }}>{e.total_shares.toLocaleString()}</span>
+            </div>
+          ))
+        )}
+      </div>
+    </section>
+  );
+}
+
 function PriceChart({ prices, symbol }) {
   if (!prices || prices.length < 2) {
     return (
@@ -386,6 +421,7 @@ export default function App() {
   const shouldReconnectRef = useRef(true);
 
   const [myOrdersByCompany, setMyOrdersByCompany] = useState({});
+  const [leaderboard, setLeaderboard] = useState([]);
   const [priceHistory, setPriceHistory] = useState({});
   const [myTrades, setMyTrades] = useState([]);
 
@@ -455,6 +491,7 @@ export default function App() {
         setUser(parsed);
         setView("DASHBOARD");
         socket.send(JSON.stringify({ type: "snapshot", token: parsed.token }));
+        socket.send(JSON.stringify({ type: "leaderboard" }));
         socket.send(JSON.stringify({ type: "my_trades", token: parsed.token }));
       } else {
         setView("LOGIN");
@@ -513,6 +550,7 @@ export default function App() {
           setAuthError("");
           setView("DASHBOARD");
           socket.send(JSON.stringify({ type: "snapshot", token: userData.token }));
+          socket.send(JSON.stringify({ type: "leaderboard" }));
           socket.send(JSON.stringify({ type: "my_trades", token: userData.token }));
         }
 
@@ -520,8 +558,10 @@ export default function App() {
           setCash(msg.cash);
           setPortfolio(msg.portfolio || []);
           const token = userRef.current?.token;
-          if (token && socket.readyState === WebSocket.OPEN)
+          if (token && socket.readyState === WebSocket.OPEN) {
             socket.send(JSON.stringify({ type: "my_trades", token }));
+            socket.send(JSON.stringify({ type: "leaderboard" }));
+          }
         }
 
         if (msg.type === "history") {
@@ -552,6 +592,10 @@ export default function App() {
 
         if (msg.type === "my_trades") {
           setMyTrades(msg.trades || []);
+        }
+
+        if (msg.type === "leaderboard") {
+          setLeaderboard(msg.entries || []);
         }
       } catch (error) {
         setLastError("Received an invalid exchange message.");
@@ -1011,6 +1055,7 @@ export default function App() {
 
           <div className="sidebar">
             <Wallet cash={cash} portfolio={portfolio} companies={companies} />
+            <LeaderboardPanel entries={leaderboard} currentUsername={user?.username} />
             <PriceChart
               prices={priceHistory[selectedCompanyId] || []}
               symbol={selectedCompany?.symbol || ""}
