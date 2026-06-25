@@ -293,6 +293,102 @@ function LeaderboardPanel({ entries, currentUsername }) {
   );
 }
 
+function PriceChart({ prices, symbol }) {
+  if (!prices || prices.length < 2) {
+    return (
+      <section className="panel price-chart-panel">
+        <div className="panel-heading">
+          <h2>Price Chart</h2>
+          <span>{symbol}</span>
+        </div>
+        <div className="empty-state" style={{ padding: "2rem 0" }}>Waiting for trades...</div>
+      </section>
+    );
+  }
+
+  const W = 400;
+  const H = 120;
+  const pad = 8;
+  const minP = Math.min(...prices);
+  const maxP = Math.max(...prices);
+  const range = maxP - minP || 1;
+
+  const pts = prices.map((p, i) => {
+    const x = pad + (i / (prices.length - 1)) * (W - pad * 2);
+    const y = H - pad - ((p - minP) / range) * (H - pad * 2);
+    return `${x},${y}`;
+  }).join(" ");
+
+  const last = prices[prices.length - 1];
+  const first = prices[0];
+  const up = last >= first;
+
+  return (
+    <section className="panel price-chart-panel">
+      <div className="panel-heading">
+        <h2>Price Chart</h2>
+        <span style={{ color: up ? "var(--buy)" : "var(--sell)" }}>
+          {symbol} · ${formatPrice(last)}
+        </span>
+      </div>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: H, display: "block" }}>
+        <polyline
+          points={pts}
+          fill="none"
+          stroke={up ? "var(--buy, #26a69a)" : "var(--sell, #ef5350)"}
+          strokeWidth="2"
+          strokeLinejoin="round"
+        />
+      </svg>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.7rem", color: "var(--muted)", padding: "0 8px 4px" }}>
+        <span>${formatPrice(minP)}</span>
+        <span>{prices.length} trades</span>
+        <span>${formatPrice(maxP)}</span>
+      </div>
+    </section>
+  );
+}
+
+function MyTradesPanel({ trades, userId, companies }) {
+  const getSymbol = id => companies.find(c => c.id === id)?.symbol || `#${id}`;
+
+  return (
+    <section className="panel bottom-panel">
+      <div className="panel-heading">
+        <h2>My Trade History</h2>
+        <span>{trades.length} fills</span>
+      </div>
+      <div className="my-orders-header">
+        <span>Side</span>
+        <span>Symbol</span>
+        <span>Price</span>
+        <span>Qty</span>
+        <span>Time</span>
+      </div>
+      <div className="my-orders-list">
+        {trades.length === 0 ? (
+          <div className="empty-state">No fills yet</div>
+        ) : (
+          trades.map((t, i) => {
+            const isBuy = Number(t.buyer_id) === Number(userId);
+            return (
+              <div className="my-order-row" key={i}>
+                <span className={`my-order-side ${isBuy ? "buy" : "sell"}`}>{isBuy ? "BUY" : "SELL"}</span>
+                <span className="my-order-symbol">{getSymbol(t.company_id)}</span>
+                <span>${formatPrice(t.price)}</span>
+                <span>{formatQuantity(t.quantity)}</span>
+                <span style={{ fontSize: "0.75rem", color: "var(--muted)" }}>
+                  {new Date(t.ts * 1000).toLocaleTimeString()}
+                </span>
+              </div>
+            );
+          })
+        )}
+      </div>
+    </section>
+  );
+}
+
 export default function App() {
   const [view, setView] = useState("LOADING"); // LOADING, LOGIN, REGISTER, DASHBOARD
   const [user, setUser] = useState(null);
@@ -311,7 +407,7 @@ export default function App() {
   const [asks, setAsks] = useState([]);
   const [buyOrders, setBuyOrders] = useState([]);
   const [sellOrders, setSellOrders] = useState([]);
-  const [form, setForm] = useState({ side: "BUY", price: "", quantity: "" });
+  const [form, setForm] = useState({ side: "BUY", price: "", quantity: "", isMarket: false });
   const [priceError, setPriceError] = useState("");
   const [quantityError, setQuantityError] = useState("");
   const [lastError, setLastError] = useState("");
@@ -326,6 +422,8 @@ export default function App() {
 
   const [myOrdersByCompany, setMyOrdersByCompany] = useState({});
   const [leaderboard, setLeaderboard] = useState([]);
+  const [priceHistory, setPriceHistory] = useState({});
+  const [myTrades, setMyTrades] = useState([]);
 
   const applyBookSnapshot = useCallback(msg => {
     const book = normalizedBook(msg);
@@ -383,6 +481,7 @@ export default function App() {
       setConnected(true);
       setMarketReady(false);
       setLastError("");
+      setPriceHistory({});
       reconnectAttemptsRef.current = 0;
 
       const savedUser = localStorage.getItem("exchange_user");
@@ -393,6 +492,7 @@ export default function App() {
         setView("DASHBOARD");
         socket.send(JSON.stringify({ type: "snapshot", token: parsed.token }));
         socket.send(JSON.stringify({ type: "leaderboard" }));
+        socket.send(JSON.stringify({ type: "my_trades", token: parsed.token }));
       } else {
         setView("LOGIN");
       }
@@ -414,6 +514,11 @@ export default function App() {
             sell_order_id: Number(view.getBigUint64(19, true))
           };
           setTrades(prev => [makeTradeRow(trade), ...prev].slice(0, 20));
+          setPriceHistory(prev => {
+            const cid = trade.company_id;
+            const existing = prev[cid] || [];
+            return { ...prev, [cid]: [...existing, trade.price].slice(-60) };
+          });
         }
         return;
       }
@@ -446,13 +551,17 @@ export default function App() {
           setView("DASHBOARD");
           socket.send(JSON.stringify({ type: "snapshot", token: userData.token }));
           socket.send(JSON.stringify({ type: "leaderboard" }));
+          socket.send(JSON.stringify({ type: "my_trades", token: userData.token }));
         }
 
         if (msg.type === "user_update") {
           setCash(msg.cash);
           setPortfolio(msg.portfolio || []);
-          if (ws.current?.readyState === WebSocket.OPEN)
-            ws.current.send(JSON.stringify({ type: "leaderboard" }));
+          const token = userRef.current?.token;
+          if (token && socket.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify({ type: "my_trades", token }));
+            socket.send(JSON.stringify({ type: "leaderboard" }));
+          }
         }
 
         if (msg.type === "history") {
@@ -474,6 +583,15 @@ export default function App() {
           }
           applyTradeHistory(msg.trades || []);
           applyBookSnapshot(msg);
+          if (Array.isArray(msg.trades) && msg.trades.length > 0) {
+            const cid = msg.company_id;
+            const prices = [...msg.trades].reverse().map(t => t.price);
+            setPriceHistory(prev => ({ ...prev, [cid]: prices.slice(-60) }));
+          }
+        }
+
+        if (msg.type === "my_trades") {
+          setMyTrades(msg.trades || []);
         }
 
         if (msg.type === "leaderboard") {
@@ -579,31 +697,43 @@ export default function App() {
       return;
     }
 
-    if (!form.price || !form.quantity) {
-      validatePrice(form.price);
-      validateQuantity(form.quantity);
-      setLastError("Enter both price and quantity.");
-      return;
-    }
-
-    const priceValid = validatePrice(form.price);
     const quantityValid = validateQuantity(form.quantity);
-
-    if (!priceValid || !quantityValid) {
+    if (!form.quantity || !quantityValid) {
+      validateQuantity(form.quantity);
+      setLastError("Enter a quantity.");
       return;
     }
 
-    const order = {
-      type: "order",
-      token: user?.token,
-      company_id: selectedCompanyId,
-      side: form.side,
-      price: Math.round(parseFloat(form.price) * 100),
-      quantity: parseInt(form.quantity, 10),
-      timestamp: Date.now()
-    };
+    if (!form.isMarket) {
+      const priceValid = validatePrice(form.price);
+      if (!form.price || !priceValid) {
+        validatePrice(form.price);
+        setLastError("Enter a price for limit orders.");
+        return;
+      }
+    }
 
-    ws.current.send(JSON.stringify(order));
+    if (form.isMarket) {
+      ws.current.send(JSON.stringify({
+        type: "market_order",
+        token: user?.token,
+        company_id: selectedCompanyId,
+        side: form.side,
+        quantity: parseInt(form.quantity, 10),
+        timestamp: Date.now()
+      }));
+    } else {
+      ws.current.send(JSON.stringify({
+        type: "order",
+        token: user?.token,
+        company_id: selectedCompanyId,
+        side: form.side,
+        price: Math.round(parseFloat(form.price) * 100),
+        quantity: parseInt(form.quantity, 10),
+        timestamp: Date.now()
+      }));
+    }
+
     setForm(current => ({ ...current, price: "", quantity: "" }));
     setPriceError("");
     setQuantityError("");
@@ -811,7 +941,7 @@ export default function App() {
               <section className="panel order-ticket">
               <div className="panel-heading">
                 <h2>Order Ticket</h2>
-                <span>Limit order</span>
+                <span>{form.isMarket ? "Market order" : "Limit order"}</span>
               </div>
 
               <form onSubmit={submitOrder}>
@@ -839,24 +969,55 @@ export default function App() {
                   </select>
                 </label>
 
-                <label>
-                  Price
-                  <input
-                    type="number"
-                    min="0.01"
-                    max="999.99"
-                    step="0.01"
-                    inputMode="decimal"
-                    placeholder="102.50"
-                    value={form.price}
-                    onChange={event => {
-                      const value = event.target.value;
-                      setForm(current => ({ ...current, price: value }));
-                      validatePrice(value);
-                    }}
-                  />
-                  {priceError && <span className="error-text">{priceError}</span>}
-                </label>
+                <div
+                  onClick={() => {
+                    setForm(current => ({ ...current, isMarket: !current.isMarket, price: "" }));
+                    setPriceError("");
+                  }}
+                  style={{
+                    display: "flex", alignItems: "center", gap: "0.6rem",
+                    cursor: "pointer", userSelect: "none",
+                    padding: "0.35rem 0.6rem",
+                    borderRadius: "6px",
+                    border: `1px solid ${form.isMarket ? "var(--buy, #26a69a)" : "var(--border, #333)"}`,
+                    background: form.isMarket ? "rgba(38,166,154,0.1)" : "transparent",
+                    transition: "all 0.15s ease",
+                    fontSize: "0.82rem",
+                    color: form.isMarket ? "var(--buy, #26a69a)" : "var(--muted, #888)"
+                  }}
+                >
+                  <span style={{
+                    width: "14px", height: "14px", borderRadius: "3px",
+                    border: `1.5px solid ${form.isMarket ? "var(--buy, #26a69a)" : "var(--muted, #888)"}`,
+                    background: form.isMarket ? "var(--buy, #26a69a)" : "transparent",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    flexShrink: 0, transition: "all 0.15s ease"
+                  }}>
+                    {form.isMarket && <span style={{ color: "#fff", fontSize: "10px", lineHeight: 1 }}>✓</span>}
+                  </span>
+                  Market order
+                </div>
+
+                {!form.isMarket && (
+                  <label>
+                    Price
+                    <input
+                      type="number"
+                      min="0.01"
+                      max="999.99"
+                      step="0.01"
+                      inputMode="decimal"
+                      placeholder="102.50"
+                      value={form.price}
+                      onChange={event => {
+                        const value = event.target.value;
+                        setForm(current => ({ ...current, price: value }));
+                        validatePrice(value);
+                      }}
+                    />
+                    {priceError && <span className="error-text">{priceError}</span>}
+                  </label>
+                )}
 
                 <label>
                   Quantity
@@ -880,7 +1041,7 @@ export default function App() {
                 {lastError && <p className="error-text">{lastError}</p>}
 
                 <button className={`submit-order ${form.side.toLowerCase()}`} type="submit">
-                  Send {form.side} Order
+                  {form.isMarket ? `Market ${form.side}` : `Limit ${form.side}`}
                 </button>
               </form>
               </section>
@@ -895,11 +1056,16 @@ export default function App() {
           <div className="sidebar">
             <Wallet cash={cash} portfolio={portfolio} companies={companies} />
             <LeaderboardPanel entries={leaderboard} currentUsername={user?.username} />
+            <PriceChart
+              prices={priceHistory[selectedCompanyId] || []}
+              symbol={selectedCompany?.symbol || ""}
+            />
             <TradeFeed trades={trades} companies={companies} />
           </div>
         </div>
         
         <MyOrdersPanel orders={myOpenOrders} onCancel={cancelOrder} companies={companies} />
+        <MyTradesPanel trades={myTrades} userId={user?.userId} companies={companies} />
       </div>
     </main>
   );
