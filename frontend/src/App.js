@@ -258,6 +258,62 @@ function TradeFeed({ trades, companies }) {
   );
 }
 
+function PriceChart({ prices, symbol }) {
+  if (!prices || prices.length < 2) {
+    return (
+      <section className="panel price-chart-panel">
+        <div className="panel-heading">
+          <h2>Price Chart</h2>
+          <span>{symbol}</span>
+        </div>
+        <div className="empty-state" style={{ padding: "2rem 0" }}>Waiting for trades...</div>
+      </section>
+    );
+  }
+
+  const W = 400;
+  const H = 120;
+  const pad = 8;
+  const minP = Math.min(...prices);
+  const maxP = Math.max(...prices);
+  const range = maxP - minP || 1;
+
+  const pts = prices.map((p, i) => {
+    const x = pad + (i / (prices.length - 1)) * (W - pad * 2);
+    const y = H - pad - ((p - minP) / range) * (H - pad * 2);
+    return `${x},${y}`;
+  }).join(" ");
+
+  const last = prices[prices.length - 1];
+  const first = prices[0];
+  const up = last >= first;
+
+  return (
+    <section className="panel price-chart-panel">
+      <div className="panel-heading">
+        <h2>Price Chart</h2>
+        <span style={{ color: up ? "var(--buy)" : "var(--sell)" }}>
+          {symbol} · ${formatPrice(last)}
+        </span>
+      </div>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: H, display: "block" }}>
+        <polyline
+          points={pts}
+          fill="none"
+          stroke={up ? "var(--buy, #26a69a)" : "var(--sell, #ef5350)"}
+          strokeWidth="2"
+          strokeLinejoin="round"
+        />
+      </svg>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.7rem", color: "var(--muted)", padding: "0 8px 4px" }}>
+        <span>${formatPrice(minP)}</span>
+        <span>{prices.length} trades</span>
+        <span>${formatPrice(maxP)}</span>
+      </div>
+    </section>
+  );
+}
+
 function MyTradesPanel({ trades, userId, companies }) {
   const getSymbol = id => companies.find(c => c.id === id)?.symbol || `#${id}`;
 
@@ -330,6 +386,7 @@ export default function App() {
   const shouldReconnectRef = useRef(true);
 
   const [myOrdersByCompany, setMyOrdersByCompany] = useState({});
+  const [priceHistory, setPriceHistory] = useState({});
   const [myTrades, setMyTrades] = useState([]);
 
   const applyBookSnapshot = useCallback(msg => {
@@ -388,6 +445,7 @@ export default function App() {
       setConnected(true);
       setMarketReady(false);
       setLastError("");
+      setPriceHistory({});
       reconnectAttemptsRef.current = 0;
 
       const savedUser = localStorage.getItem("exchange_user");
@@ -419,6 +477,11 @@ export default function App() {
             sell_order_id: Number(view.getBigUint64(19, true))
           };
           setTrades(prev => [makeTradeRow(trade), ...prev].slice(0, 20));
+          setPriceHistory(prev => {
+            const cid = trade.company_id;
+            const existing = prev[cid] || [];
+            return { ...prev, [cid]: [...existing, trade.price].slice(-60) };
+          });
         }
         return;
       }
@@ -480,6 +543,11 @@ export default function App() {
           }
           applyTradeHistory(msg.trades || []);
           applyBookSnapshot(msg);
+          if (Array.isArray(msg.trades) && msg.trades.length > 0) {
+            const cid = msg.company_id;
+            const prices = [...msg.trades].reverse().map(t => t.price);
+            setPriceHistory(prev => ({ ...prev, [cid]: prices.slice(-60) }));
+          }
         }
 
         if (msg.type === "my_trades") {
@@ -900,6 +968,10 @@ export default function App() {
 
           <div className="sidebar">
             <Wallet cash={cash} portfolio={portfolio} companies={companies} />
+            <PriceChart
+              prices={priceHistory[selectedCompanyId] || []}
+              symbol={selectedCompany?.symbol || ""}
+            />
             <TradeFeed trades={trades} companies={companies} />
           </div>
         </div>
