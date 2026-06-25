@@ -314,6 +314,46 @@ function PriceChart({ prices, symbol }) {
   );
 }
 
+function MyTradesPanel({ trades, userId, companies }) {
+  const getSymbol = id => companies.find(c => c.id === id)?.symbol || `#${id}`;
+
+  return (
+    <section className="panel bottom-panel">
+      <div className="panel-heading">
+        <h2>My Trade History</h2>
+        <span>{trades.length} fills</span>
+      </div>
+      <div className="my-orders-header">
+        <span>Side</span>
+        <span>Symbol</span>
+        <span>Price</span>
+        <span>Qty</span>
+        <span>Time</span>
+      </div>
+      <div className="my-orders-list">
+        {trades.length === 0 ? (
+          <div className="empty-state">No fills yet</div>
+        ) : (
+          trades.map((t, i) => {
+            const isBuy = Number(t.buyer_id) === Number(userId);
+            return (
+              <div className="my-order-row" key={i}>
+                <span className={`my-order-side ${isBuy ? "buy" : "sell"}`}>{isBuy ? "BUY" : "SELL"}</span>
+                <span className="my-order-symbol">{getSymbol(t.company_id)}</span>
+                <span>${formatPrice(t.price)}</span>
+                <span>{formatQuantity(t.quantity)}</span>
+                <span style={{ fontSize: "0.75rem", color: "var(--muted)" }}>
+                  {new Date(t.ts * 1000).toLocaleTimeString()}
+                </span>
+              </div>
+            );
+          })
+        )}
+      </div>
+    </section>
+  );
+}
+
 export default function App() {
   const [view, setView] = useState("LOADING"); // LOADING, LOGIN, REGISTER, DASHBOARD
   const [user, setUser] = useState(null);
@@ -347,6 +387,7 @@ export default function App() {
 
   const [myOrdersByCompany, setMyOrdersByCompany] = useState({});
   const [priceHistory, setPriceHistory] = useState({});
+  const [myTrades, setMyTrades] = useState([]);
 
   const applyBookSnapshot = useCallback(msg => {
     const book = normalizedBook(msg);
@@ -413,10 +454,8 @@ export default function App() {
         userRef.current = parsed;
         setUser(parsed);
         setView("DASHBOARD");
-        socket.send(JSON.stringify({ 
-          type: "snapshot",
-          token: parsed.token
-        }));
+        socket.send(JSON.stringify({ type: "snapshot", token: parsed.token }));
+        socket.send(JSON.stringify({ type: "my_trades", token: parsed.token }));
       } else {
         setView("LOGIN");
       }
@@ -474,11 +513,15 @@ export default function App() {
           setAuthError("");
           setView("DASHBOARD");
           socket.send(JSON.stringify({ type: "snapshot", token: userData.token }));
+          socket.send(JSON.stringify({ type: "my_trades", token: userData.token }));
         }
 
         if (msg.type === "user_update") {
           setCash(msg.cash);
           setPortfolio(msg.portfolio || []);
+          const token = userRef.current?.token;
+          if (token && socket.readyState === WebSocket.OPEN)
+            socket.send(JSON.stringify({ type: "my_trades", token }));
         }
 
         if (msg.type === "history") {
@@ -505,6 +548,10 @@ export default function App() {
             const prices = [...msg.trades].reverse().map(t => t.price);
             setPriceHistory(prev => ({ ...prev, [cid]: prices.slice(-60) }));
           }
+        }
+
+        if (msg.type === "my_trades") {
+          setMyTrades(msg.trades || []);
         }
       } catch (error) {
         setLastError("Received an invalid exchange message.");
@@ -930,6 +977,7 @@ export default function App() {
         </div>
         
         <MyOrdersPanel orders={myOpenOrders} onCancel={cancelOrder} companies={companies} />
+        <MyTradesPanel trades={myTrades} userId={user?.userId} companies={companies} />
       </div>
     </main>
   );
