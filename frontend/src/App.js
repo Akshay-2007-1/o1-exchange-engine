@@ -545,7 +545,9 @@ export default function App() {
             buy_order_id: Number(view.getBigUint64(11, true)),
             sell_order_id: Number(view.getBigUint64(19, true))
           };
-          setTrades(prev => [makeTradeRow(trade), ...prev].slice(0, 20));
+          if (Number(trade.company_id) === Number(selectedCompanyIdRef.current)) {
+            setTrades(prev => [makeTradeRow(trade), ...prev].slice(0, 20));
+          }
           setPriceHistory(prev => {
             const cid = trade.company_id;
             const existing = prev[cid] || [];
@@ -893,6 +895,9 @@ export default function App() {
     const companyId = Number(event.target.value);
     selectedCompanyIdRef.current = companyId;
     setSelectedCompanyId(companyId);
+    setTrades([]);
+    const co = companies.find(c => Number(c.id) === companyId);
+    if (co) setSelectedCompany({ id: co.id, name: co.name, symbol: co.symbol, totalShares: co.total_shares });
     requestSnapshot(companyId);
   };
 

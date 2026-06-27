@@ -326,6 +326,8 @@ private:
             return;
         }
         current_user_id_ = result.id;
+        for (const auto &company : market_.companies())
+            db_.release_shares(result.id, company.id, 100);
         send(json{{"type", "registered"}, {"user_id", result.id}, {"username", username}, {"message", "Account created successfully"}}.dump());
         send_user_update();
     }
