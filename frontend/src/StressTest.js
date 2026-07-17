@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import PerformanceGraphs from "./PerformanceGraphs";
 
 const ORDER_PRESETS = [100, 1000, 10000, 100000];
 const TICK_MS = 50; // 20 ticks/sec — batches orders within a tick to hit the target rate
@@ -32,7 +33,7 @@ function randomOrder(companies, companyFilter) {
   };
 }
 
-export default function StressTest({ send, engineMode, companies, token, connected }) {
+export default function StressTest({ send, engineMode, companies, token, connected, metrics = [] }) {
   const [numOrders, setNumOrders] = useState(1000);
   const [rate, setRate] = useState(200);
   const [companyFilter, setCompanyFilter] = useState("ALL");
@@ -196,6 +197,8 @@ export default function StressTest({ send, engineMode, companies, token, connect
           engine's matching throughput — see live engine metrics below for that.
         </p>
       </div>
+
+      <PerformanceGraphs metrics={metrics} />
     </section>
   );
 }
