@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 
 const ORDER_PRESETS = [100, 1000, 10000, 100000];
 const TICK_MS = 50; // 20 ticks/sec — batches orders within a tick to hit the target rate
+const SYNTHETIC_TRADER_COUNT = 50; // spreads fills across many fake user_ids so
+// self-trade prevention doesn't constantly trip against a single real account
 
 function randomOrder(companies, companyFilter) {
   const pool = companyFilter === "ALL" ? companies : companies.filter(c => String(c.id) === String(companyFilter));
@@ -14,9 +16,14 @@ function randomOrder(companies, companyFilter) {
   // than just resting orders.
   const price = 10000 + Math.floor((Math.random() - 0.5) * 400);
   const quantity = 10 + Math.floor(Math.random() * 490);
+  // Negative IDs never collide with a real (positive) DB user_id, so the
+  // server skips wallet reservation/settlement for these entirely.
+  const syntheticUserId = -(1 + Math.floor(Math.random() * SYNTHETIC_TRADER_COUNT));
 
   return {
     type: "order",
+    stress: true,
+    synthetic_user_id: syntheticUserId,
     company_id: company.id,
     side,
     price,
