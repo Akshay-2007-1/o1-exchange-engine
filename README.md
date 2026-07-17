@@ -1,16 +1,19 @@
 # O(1) Exchange — Matching Engine
 
-A high-performance, in-memory limit order book and matching engine built in C++, with a real-time React trading dashboard and multi-instrument market support. Built for NUS Orbital 2026 (Apollo level).
+A high-performance, in-memory limit order book and matching engine built in C++, with a real-time React trading dashboard, multi-instrument market support, user accounts/wallets, and a live CURRENT-vs-LEGACY performance benchmark. Built for NUS Orbital 2026 (Apollo level).
 
 ---
 
 ## What it does
 
 * Hosts multiple independent order books — one per listed company (APL, BLZ, CRN)
-* Accepts limit buy/sell orders routed by company
-* Matches orders on strict **price/time (FIFO) priority**
+* Accepts limit **and** market buy/sell orders routed by company
+* Matches orders on strict **price/time (FIFO) priority**, with self-trade prevention
 * Emits trade events on every fill, broadcast to all connected clients via WebSocket
-* Serves a live React dashboard with order book depth, trade tape, and market stats
+* User accounts with cash wallets and share portfolios (libsodium password hashing, session tokens)
+* Order cancellation with ownership verification and full refund of the unfilled remainder
+* Serves a live React dashboard: order book depth, trade tape, price chart (persisted across restarts), leaderboard, my-open-orders, my-trade-history, and fill-notification toasts
+* A built-in stress-test UI that fires bursts of synthetic orders and can switch the whole market between the O(1) bitmap engine (`CURRENT`) and a `std::map`-based baseline (`LEGACY`) at runtime, with live throughput/latency charts
 
 ---
 
@@ -18,115 +21,153 @@ A high-performance, in-memory limit order book and matching engine built in C++,
 
 ```
 frontend/src/App.js         React trading UI (WebSocket client)
+frontend/src/StressTest.js  Stress-test UI + CURRENT/LEGACY engine toggle
+frontend/src/PerformanceGraphs.js  Live throughput/latency sparklines
         │
-        │  ws://host:9001 (JSON messages)
+        │  ws://host:9001 (JSON control messages + binary trade frames)
         │
-include/Server.h            WebSocket server (Boost.Beast, multi-client)
+include/Server.h            WebSocket server (Boost.Beast), single-writer engine_thread_,
+                             lock-free SPSC task queue, periodic metrics broadcast
         │
 include/Market.h            Multi-instrument market state
-        │  MarketState = map<company_id, InstrumentState>
-        │  InstrumentState = { Company metadata + OrderBook + mutex }
+        │  MarketState → one InstrumentState per company
+        │  InstrumentState = { Company metadata + unique_ptr<IOrderBook> book }
         │
-include/OrderBook.h         Core matching engine (per instrument)
-        │  bids/asks: O(1) multi-level bitmaps + pre-allocated linked lists
+include/IOrderBook.h        Abstract matching-engine interface (Order, Trade, ...)
+include/OrderBook.h         CURRENT engine — O(1) hierarchical bitmap + pre-allocated pool
+include/OrderBookLegacy.h   LEGACY engine — std::map + std::list baseline, for comparison
+        │
+include/Database.h          SQLite (WAL) — users, wallets, portfolios, trades, sessions
         │
 src/main.cpp                Bootstraps market with 3 companies, starts server
 tests/test_orderbook.cpp    Google Test suite
+benchmark/benchmark_orderbook.cpp  Google Benchmark: OrderBook vs OrderBookLegacy
 ```
 
 ---
 
-## Core Engine (include/OrderBook.h)
+## Core Engine (`include/OrderBook.h`, `include/OrderBookLegacy.h`)
 
-### Data Structures
+### Data structures (`include/IOrderBook.h`)
 
 ```cpp
-enum class Side { BUY, SELL };
-
 struct Order {
     uint64_t id;
-    Side     side;
-    double   price;
-    uint32_t quantity;
+    int64_t  user_id;
     uint64_t timestamp;
-    uint32_t company_id;
-    std::string company_name;
+    uint32_t price;      // cents
+    uint32_t quantity;
+    uint16_t company_id;
+    bool     side;       // true = BUY, false = SELL
 };
 
 struct Trade {
     uint64_t buy_order_id;
     uint64_t sell_order_id;
-    double   price;
+    int64_t  buyer_user_id;
+    int64_t  seller_user_id;
+    uint32_t price;      // cents
     uint32_t quantity;
-    uint32_t company_id;
-    std::string company_name;
+    uint32_t buyer_limit_price;
+    uint16_t company_id;
 };
 ```
 
-### OrderBook internals
+Both structs (plus `ITradeListener`) live in `IOrderBook.h` so `OrderBook` and `OrderBookLegacy` share one vocabulary. Prices are integer cents throughout the matching path — dollar formatting only happens at the WebSocket/UI boundary.
+
+### `OrderBook` internals (the `CURRENT` engine)
 
 ```cpp
-class OrderBook {
-    std::vector<OrderNode> node_pool_;
+class OrderBook : public IOrderBook {
+    std::vector<OrderNode> node_pool_;      // pre-allocated, 64-byte aligned
     OrderList bids_[MAX_PRICE];
     OrderList asks_[MAX_PRICE];
 
-    // O(1) multi-level bitmaps for price discovery
+    // O(1) 3-level bitmaps for price discovery
     uint64_t bids_l1_[BITMAP_L1_SIZE], bids_l2_[BITMAP_L2_SIZE], bids_l3_;
     uint64_t asks_l1_[BITMAP_L1_SIZE], asks_l2_[BITMAP_L2_SIZE], asks_l3_;
 };
 ```
 
-**Price priority** is enforced by an O(1) multi-level bitmap allowing for instant retrieval of the best price level. **Time priority** is enforced by a linked list at each price level. `OrderNode` objects are pre-allocated and packed into exactly 64 bytes to perfectly fit cache lines and prevent false sharing.
+**Price priority** is enforced by the 3-level bitmap, giving O(1) retrieval of the best price level via `__builtin_clzll`/`__builtin_ctzll`. **Time priority** is enforced by a doubly-linked list at each price level. `OrderNode` is packed into exactly 64 bytes to fit one cache line and avoid false sharing.
+
+### `OrderBookLegacy` internals (the `LEGACY` baseline)
+
+```cpp
+class OrderBookLegacy : public IOrderBook {
+    std::map<uint32_t, PriceLevel, std::greater<uint32_t>> bids_; // highest first
+    std::map<uint32_t, PriceLevel, std::less<uint32_t>>    asks_; // lowest first
+    // PriceLevel = { std::list<Order> orders; uint32_t total_quantity; }
+};
+```
+
+Deliberately naive: an O(log N) map lookup per price level, heap-allocated list nodes, no pool. It exists purely as a real baseline to benchmark `OrderBook` against — same matching semantics (including self-trade prevention), verified to produce identical trade sequences for identical input.
 
 ### Matching algorithm
 
-When a new order arrives, `add_order()` calls `match_buy()` or `match_sell()`:
-
 ```
 while (incoming has quantity remaining AND best_price crosses):
-    best_price = get_best_ask()                 // O(1) via hardware __builtin_ctzll on bitmaps
-    consume from head of asks_[best_price] list // O(1), FIFO
-    generate a Trade event
-    fire on_trade callback
-    if list is empty: clear_bit(best_price)     // O(1)
+    best_price = get_best_ask()                 // O(1) via bitmap scan (CURRENT) / map begin() (LEGACY)
+    if incoming.user_id == resting.user_id: reject remaining qty, stop  // self-trade prevention
+    consume from head of asks_[best_price] list  // FIFO
+    generate a Trade event, fire on_trade callback
+    if list is empty: clear the price level
 if incoming still has quantity: add to resting book
 ```
 
-All hot-path operations are O(1). The only O(log n) operation is the map insertion when a new price level is created.
-
 ### Book snapshots
 
-`bid_depth(limit)` and `ask_depth(limit)` return a `vector<DepthLevel>` summarising up to `limit` price levels, used to build the WebSocket `book` snapshot message.
+`bid_depth(limit)`/`ask_depth(limit)` return a `vector<IOrderBook::DepthLevel>` summarising up to `limit` price levels; `bid_orders(limit)`/`ask_orders(limit)` return individual resting orders (for the "My Open Orders" panel). Both back the WebSocket `book`/`snapshot` messages.
 
 ---
 
-## Multi-Instrument Market (include/Market.h)
+## Performance: CURRENT vs LEGACY
+
+`benchmark/benchmark_orderbook.cpp` (Google Benchmark) runs both engines through identical input at 1K/10K/100K orders across 4 scenarios. Representative numbers from one run (`--benchmark_min_time=0.2s`, will vary by machine):
+
+| Scenario (100K orders) | OrderBook (CURRENT) | OrderBookLegacy | Speedup |
+|---|---|---|---|
+| Book building (resting orders across many price levels) | 3.89 ms | 94.2 ms | ~24x |
+| Cancellations | 2.49 ms | 75.6 ms | ~30x |
+| Simple matching (one price level) | 0.91 ms | 2.84 ms | ~3x |
+| Partial fills (one price level) | 0.70 ms | 0.54 ms | Legacy edges this one |
+
+The gap widens specifically with the **number of distinct price levels** in play — exactly the architectural story: the bitmap avoids the O(log N) map lookup `OrderBookLegacy` pays per price level. When only one price level is involved (simple matching, partial fills), both engines are close to O(1) and the bitmap's bookkeeping overhead can even lose narrowly. Reproduce with:
+
+```bash
+cd build && ./benchmarks --benchmark_min_time=0.2s
+```
+
+Or drive it live from the browser: the **Stress Test** panel in the dashboard fires configurable order bursts and plots live throughput/p50/p99 latency for whichever engine is active.
+
+---
+
+## Multi-Instrument Market (`include/Market.h`)
 
 The exchange is not one global order book. It is a **map of independent order books**, one per listed company.
 
 ```cpp
 struct Company {
-    uint32_t    id;
+    uint16_t    id;
     std::string symbol;       // e.g. "APL"
     std::string name;         // e.g. "Apollo Technologies"
     uint64_t    total_shares;
 };
 
 struct InstrumentState {
-    Company   company;
-    OrderBook book;
-    std::mutex mutex;         // per-instrument lock — instruments don't block each other
+    Company                    company;
+    std::unique_ptr<IOrderBook> book;   // OrderBook or OrderBookLegacy
 };
 
 class MarketState {
-    std::map<uint32_t, InstrumentState> instruments;
+    // one InstrumentState per company, direct-mapped array by company_id
+    void set_engine_mode(EngineMode mode); // swaps every book, discards resting orders
 };
 ```
 
-**Routing:** every incoming order carries a `company_id`. The server does one map lookup to find the right `InstrumentState`, then calls `instrument->book.add_order(order)`. A Crown Energy order never touches Apollo's book.
+**Routing:** every incoming order carries a `company_id`. The server does one lookup to find the right `InstrumentState`, then routes to `instrument->book->process_buy_order(...)`/`process_sell_order(...)`. A Crown Energy order never touches Apollo's book.
 
-**Locking:** each instrument has its own mutex. Matching on Apollo does not block a snapshot read on Crown.
+**Concurrency:** no per-instrument mutex. A single `engine_thread_` in `Server.h` is the *only* thing that ever touches `InstrumentState::book` — all other threads communicate with it exclusively through a lock-free SPSC queue.
 
 ### Listed companies (bootstrapped at startup)
 
@@ -138,81 +179,44 @@ class MarketState {
 
 ---
 
-## WebSocket Server (include/Server.h)
+## WebSocket Server (`include/Server.h`)
 
-Built with **Boost.Beast**. Each connected client gets its own thread (`std::thread(...).detach()`). A `SessionRegistry` (mutex-protected `std::set`) tracks all live sessions. Trade events and book snapshots are broadcast to all connected clients via `registry_.broadcast()`.
+Built with **Boost.Beast**. Each connected client gets its own `Session`. A `SessionRegistry` (mutex-protected `std::set`) tracks all live sessions and handles broadcast. Trade fills go out as compact 27-byte binary frames; everything else is JSON.
 
-### Message protocol
+### Message protocol (client → server)
 
-**Client → Server (order submission):**
+| Type | Purpose |
+|---|---|
+| `register` / `login` | Account creation / session-token auth |
+| `order` | Submit a limit order. Add `"is_market": true`-equivalent via `market_order` type for market orders. Add `"stress": true, "synthetic_user_id": -N` to bypass wallet reservation for load testing. |
+| `market_order` | Submit a market order (fills at best available price) |
+| `cancel` | Cancel a resting order (ownership-verified) |
+| `snapshot` | Request full book + price history + engine mode for an instrument |
+| `my_trades` | Request this user's trade history |
+| `leaderboard` | Request the cash-ranked leaderboard |
+| `switch_engine` | `{"mode":"CURRENT"\|"LEGACY"}` — swap the whole market's engine |
 
-```json
-{
-  "type": "order",
-  "company_id": 1,
-  "id": 42,
-  "side": "BUY",
-  "price": 102.50,
-  "quantity": 150,
-  "timestamp": 1234567890
-}
-```
+### Message protocol (server → client)
 
-**Client → Server (snapshot request):**
-
-```json
-{ "type": "snapshot", "company_id": 1 }
-```
-
-**Client → Server (cancel order):**
-
-```json
-{ "type": "cancel", "company_id": 1, "order_id": 42 }
-```
-
-**Server → All clients (trade event):**
-
-```json
-{
-  "type": "trade",
-  "company_id": 1,
-  "company_name": "Apollo Technologies",
-  "price": 102.50,
-  "quantity": 150,
-  "buy_order_id": 42,
-  "sell_order_id": 17
-}
-```
-
-**Server → Client (book snapshot):**
-
-```json
-{
-  "type": "book",
-  "company_id": 1,
-  "company_name": "Apollo Technologies",
-  "company_symbol": "APL",
-  "total_shares": 1000000,
-  "bids": \[{"price": 101.50, "quantity": 200, "orders": 1}],
-  "asks": \[{"price": 102.00, "quantity": 150, "orders": 1}],
-  "companies": \[
-    {"id": 1, "symbol": "APL", "name": "Apollo Technologies"},
-    {"id": 2, "symbol": "BLZ", "name": "Blaze Manufacturing"},
-    {"id": 3, "symbol": "CRN", "name": "Crown Energy"}
-  ]
-}
-```
+| Type | Purpose |
+|---|---|
+| `trade` (binary) | A fill occurred — company_id, price, quantity, order ids |
+| `book` | Full bid/ask depth + open orders for an instrument, includes `engine_mode` |
+| `snapshot` | Same as `book` plus `companies`, recent trade history, and persisted `price_history` |
+| `user_update` | Updated cash/portfolio after settlement |
+| `leaderboard` | Ranked list of users by cash |
+| `my_trades` | This user's trade history |
+| `engine_mode` | Broadcast after a `switch_engine` completes |
+| `metrics` | Every ~500ms: `engine_mode`, `orders_processed`, `throughput_ops_sec`, `latency_p50_us`, `latency_p99_us` — timed around the matching call only, not WS/DB overhead |
+| `error` | Rejection reason (insufficient funds, invalid message, self-trade prevention, ...) |
 
 ---
 
-## React Frontend (frontend/src/App.js)
+## React Frontend (`frontend/src/`)
 
-Single-page trading dashboard. Connects to the WebSocket server on mount. Handles three message types: `trade` (appends to trade tape), `book` (updates bid/ask depth tables), `history` (pre-populates trade tape on connect).
-
-**Two scopes of state:**
-
-* **Instrument-specific:** order ticket, bid/ask depth ladder, best bid/ask/spread for the selected company
-* **Global:** trade tape aggregates executions across all instruments
+- **`App.js`** — Single-page trading dashboard: auth flow, order ticket (limit + market), order book depth ladder, price chart (seeded from persisted history, then live), trade tape, leaderboard, my-open-orders, my-trade-history, and fill-notification toasts.
+- **`StressTest.js`** — Engine toggle (`CURRENT`/`LEGACY`), order-count presets, rate-limited synthetic order generator, live submit/elapsed/send-rate stats.
+- **`PerformanceGraphs.js`** — SVG sparklines for throughput and p50/p99 match latency, driven by the `metrics` broadcast stream; embedded in `StressTest.js`.
 
 Switching the company dropdown sends a `snapshot` request for that `company_id`. Order submission and cancellation both include `company_id` in the payload.
 
@@ -270,11 +274,12 @@ npm install
 ## Build
 
 ```bash
-mkdir build \&\& cd build
+mkdir build && cd build
 cmake ..
 make
 ./engine         # starts WebSocket server on port 9001
 ./tests          # runs the Google Test suite
+./benchmarks     # runs the OrderBook vs OrderBookLegacy benchmark suite
 ```
 
 **Docker:**
@@ -288,7 +293,7 @@ docker run -d -p 9001:9001 exchange-engine
 
 ## Testing
 
-Google Test suite in `tests/test_orderbook.cpp` covers:
+Google Test suite in `tests/test_orderbook.cpp`:
 
 |Test|What it verifies|
 |-|-|
@@ -296,6 +301,9 @@ Google Test suite in `tests/test_orderbook.cpp` covers:
 |`PartialFill`|Buyer wants more than available — partial trade, remainder rests|
 |`NoMatch`|Prices don't cross — both orders rest, no trade|
 |`TimePriority`|Two sells at same price — earlier order fills first|
+|`RestingOrderSnapshotsPreservePriorityAndQuantity`|Depth/order snapshots reflect correct price-time ordering and remaining quantity|
+|`SelfTradeBlocked`|A user can't trade against their own resting order|
+|`CancelRemovesOrder`|Cancellation removes the order and returns its quantity|
 
 CI/CD via GitHub Actions runs the full test suite on every push to `main`.
 
@@ -323,17 +331,24 @@ Engine accessible at `ws://20.205.25.160:9001`.
 ```
 exchange-engine/
 ├── include/
-│   ├── OrderBook.h       core matching engine — Order, Trade, OrderBook
+│   ├── IOrderBook.h      abstract matching-engine interface — Order, Trade, ITradeListener
+│   ├── OrderBook.h       CURRENT engine — O(1) bitmap + pre-allocated pool
+│   ├── OrderBookLegacy.h LEGACY engine — std::map baseline, for comparison
 │   ├── Market.h          multi-instrument market — Company, InstrumentState, MarketState
-│   └── Server.h          WebSocket server — Session, SessionRegistry, Server
+│   ├── Server.h          WebSocket server — Session, SessionRegistry, Server, metrics
+│   └── Database.h        SQLite (WAL) — users, wallets, portfolios, trades, leaderboard
 ├── src/
 │   ├── main.cpp          bootstraps market with 3 companies, starts server
 │   └── server.cpp        CMake compilation unit
 ├── tests/
-│   └── test_orderbook.cpp Google Test suite
+│   └── test_orderbook.cpp  Google Test suite
+├── benchmark/
+│   └── benchmark_orderbook.cpp  Google Benchmark: OrderBook vs OrderBookLegacy
 ├── frontend/
 │   └── src/
-│       └── App.js        React trading dashboard
+│       ├── App.js               React trading dashboard
+│       ├── StressTest.js        stress-test UI + engine toggle
+│       └── PerformanceGraphs.js live throughput/latency sparklines
 ├── CMakeLists.txt        cross-platform build (Mac + Linux/WSL)
 ├── Dockerfile            containerised build for deployment
 ├── .dockerignore
@@ -341,4 +356,3 @@ exchange-engine/
     └── workflows/
         └── ci.yml        GitHub Actions CI/CD pipeline
 ```
-
