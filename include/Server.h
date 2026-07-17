@@ -15,6 +15,8 @@
 #include <deque>
 #include <atomic>
 #include <condition_variable>
+#include <chrono>
+#include <algorithm>
 #include "Market.h"
 #include "Database.h"
 
@@ -587,11 +589,23 @@ private:
                     send(json{{"type", "error"}, {"message", "Authentication required/invalid."}}.dump());
                     return;
                 }
+                current_user_id_ = session_result.id;
 
+                // Stress-test orders benchmark the matching engine only. They carry
+                // a synthetic negative user_id (never a real account) so wallet
+                // reservation/settlement is skipped entirely — settle_trade/
+                // release_cash/release_shares simply no-op on a user_id that
+                // matches no DB row — and self-trade prevention doesn't constantly
+                // trip against a single real account submitting every order.
+                const bool is_stress = msg.value("stress", false);
                 int64_t user_id = session_result.id;
-                current_user_id_ = user_id;
 
-                if (side)
+                if (is_stress)
+                {
+                    int64_t synthetic_id = msg.value("synthetic_user_id", static_cast<int64_t>(-1));
+                    user_id = (synthetic_id < 0) ? synthetic_id : -1;
+                }
+                else if (side)
                 {
                     double required_cash = (static_cast<double>(price) / 100.0) * quantity;
                     auto check = db_.reserve_cash(user_id, required_cash);
@@ -819,9 +833,14 @@ private:
                     }
                     else [[likely]]
                     {
+                        auto match_start = std::chrono::steady_clock::now();
                         uint32_t rejected_qty = task.order.side
                             ? instrument->book->process_buy_order(task.order)
                             : instrument->book->process_sell_order(task.order);
+                        auto match_end = std::chrono::steady_clock::now();
+                        metrics_latencies_us_.push_back(static_cast<uint32_t>(
+                            std::chrono::duration_cast<std::chrono::microseconds>(match_end - match_start).count()));
+                        metrics_orders_processed_++;
 
                         registry_.broadcast(book_to_json(*instrument).dump());
 
@@ -869,7 +888,45 @@ private:
                         task.session->send(msg);
                 }
             }
+
+            maybe_emit_metrics();
         }
+    }
+
+    // Called continuously from the engine thread's busy-poll loop (never
+    // blocks: just a cheap timestamp check most iterations). Every
+    // METRICS_INTERVAL_ of wall-clock time, summarizes matching-engine
+    // latency (process_buy_order/process_sell_order only — not WS/DB time)
+    // over the window and broadcasts it, then resets the window. This is
+    // what backs the live throughput/latency charts in the stress-test UI.
+    void maybe_emit_metrics()
+    {
+        auto now = std::chrono::steady_clock::now();
+        if (now - metrics_window_start_ < METRICS_INTERVAL_)
+            return;
+
+        double elapsed_sec = std::chrono::duration<double>(now - metrics_window_start_).count();
+        double p50_us = 0.0, p99_us = 0.0;
+        if (!metrics_latencies_us_.empty())
+        {
+            std::sort(metrics_latencies_us_.begin(), metrics_latencies_us_.end());
+            std::size_t n = metrics_latencies_us_.size();
+            p50_us = metrics_latencies_us_[n * 50 / 100];
+            p99_us = metrics_latencies_us_[std::min(n - 1, n * 99 / 100)];
+        }
+        double throughput = elapsed_sec > 0.0 ? metrics_orders_processed_ / elapsed_sec : 0.0;
+
+        registry_.broadcast(json{
+            {"type", "metrics"},
+            {"engine_mode", market_.engine_mode() == EngineMode::LEGACY ? "LEGACY" : "CURRENT"},
+            {"orders_processed", metrics_orders_processed_},
+            {"throughput_ops_sec", throughput},
+            {"latency_p50_us", p50_us},
+            {"latency_p99_us", p99_us}}.dump());
+
+        metrics_latencies_us_.clear();
+        metrics_orders_processed_ = 0;
+        metrics_window_start_ = now;
     }
 
     void run_db_worker()
@@ -961,4 +1018,10 @@ private:
     std::atomic<bool> stop_worker_{false};
     std::thread engine_thread_;
     std::thread db_worker_;
+
+    // Engine-thread-only state (single-writer, no locking needed).
+    static constexpr std::chrono::milliseconds METRICS_INTERVAL_{500};
+    std::vector<uint32_t> metrics_latencies_us_;
+    uint64_t metrics_orders_processed_ = 0;
+    std::chrono::steady_clock::time_point metrics_window_start_ = std::chrono::steady_clock::now();
 };
