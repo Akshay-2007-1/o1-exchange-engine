@@ -62,13 +62,15 @@ struct EngineTask
     {
         ORDER,
         CANCEL,
-        SNAPSHOT
+        SNAPSHOT,
+        SWITCH_ENGINE
     } type;
     uint16_t company_id;
     Order order;
     uint64_t order_id;
     int64_t user_id;
     std::shared_ptr<Session> session;
+    EngineMode engine_mode = EngineMode::CURRENT; // used by SWITCH_ENGINE
 };
 
 using EngineQueue = SPSCQueue<EngineTask, 65536>;
@@ -98,7 +100,7 @@ inline json trade_to_json(const Trade &t)
         {"sell_order_id", t.sell_order_id}};
 }
 
-inline json depth_to_json(const std::vector<OrderBook::DepthLevel> &depth)
+inline json depth_to_json(const std::vector<IOrderBook::DepthLevel> &depth)
 {
     json levels = json::array();
     for (const auto &level : depth)
@@ -108,7 +110,7 @@ inline json depth_to_json(const std::vector<OrderBook::DepthLevel> &depth)
     return levels;
 }
 
-inline json orders_to_json(const std::vector<OrderBook::OrderSnapshot> &orders)
+inline json orders_to_json(const std::vector<IOrderBook::OrderSnapshot> &orders)
 {
     json rows = json::array();
     for (const auto &order : orders)
@@ -137,10 +139,11 @@ inline json book_to_json(const InstrumentState &instrument)
         {"company_name", instrument.company.name},
         {"company_symbol", instrument.company.symbol},
         {"total_shares", instrument.company.total_shares},
-        {"bids", depth_to_json(instrument.book.bid_depth())},
-        {"asks", depth_to_json(instrument.book.ask_depth())},
-        {"buy_orders", orders_to_json(instrument.book.bid_orders())},
-        {"sell_orders", orders_to_json(instrument.book.ask_orders())}};
+        {"engine_mode", instrument.book->engine_name()},
+        {"bids", depth_to_json(instrument.book->bid_depth())},
+        {"asks", depth_to_json(instrument.book->ask_depth())},
+        {"buy_orders", orders_to_json(instrument.book->bid_orders())},
+        {"sell_orders", orders_to_json(instrument.book->ask_orders())}};
 }
 
 inline json profile_to_json(const Database::UserProfile &profile)
@@ -166,10 +169,11 @@ inline json snapshot_to_json(const InstrumentState &instrument, const json &hist
         {"total_shares", instrument.company.total_shares},
         {"companies", companies_to_json(companies)},
         {"trades", history.value("trades", json::array())},
-        {"bids", depth_to_json(instrument.book.bid_depth())},
-        {"asks", depth_to_json(instrument.book.ask_depth())},
-        {"buy_orders", orders_to_json(instrument.book.bid_orders())},
-        {"sell_orders", orders_to_json(instrument.book.ask_orders())}};
+        {"engine_mode", instrument.book->engine_name()},
+        {"bids", depth_to_json(instrument.book->bid_depth())},
+        {"asks", depth_to_json(instrument.book->ask_depth())},
+        {"buy_orders", orders_to_json(instrument.book->bid_orders())},
+        {"sell_orders", orders_to_json(instrument.book->ask_orders())}};
 }
 
 class TradeHistory
@@ -400,6 +404,23 @@ private:
                 return;
             }
 
+            if (type == "switch_engine")
+            {
+                std::string mode_str = msg.value("mode", "");
+                if (mode_str != "CURRENT" && mode_str != "LEGACY")
+                {
+                    send(json{{"type", "error"}, {"message", "mode must be CURRENT or LEGACY."}}.dump());
+                    return;
+                }
+                EngineTask task;
+                task.type = EngineTask::SWITCH_ENGINE;
+                task.company_id = 0;
+                task.engine_mode = (mode_str == "LEGACY") ? EngineMode::LEGACY : EngineMode::CURRENT;
+                task.session = shared_from_this();
+                while (!engine_queue_.push(task)) std::this_thread::yield();
+                return;
+            }
+
             if (type == "my_trades")
             {
                 std::string token = msg.value("token", "");
@@ -486,7 +507,7 @@ private:
 
                 if (side)
                 {
-                    uint32_t ref_price = inst->book.best_ask();
+                    uint32_t ref_price = inst->book->best_ask();
                     if (ref_price == NULL_IDX)
                     {
                         send(json{{"type", "error"}, {"message", "No asks in book — market buy cannot execute."}}.dump());
@@ -513,7 +534,7 @@ private:
                 }
                 else
                 {
-                    uint32_t ref_price = inst->book.best_bid();
+                    uint32_t ref_price = inst->book->best_bid();
                     if (ref_price == NULL_IDX)
                     {
                         send(json{{"type", "error"}, {"message", "No bids in book — market sell cannot execute."}}.dump());
@@ -677,7 +698,7 @@ public:
         {
             InstrumentState *instrument = market_.find_instrument(company.id);
             if (instrument)
-                instrument->book.trade_listener = this;
+                instrument->book->trade_listener = this;
         }
 
         engine_thread_ = std::thread([this]()
@@ -759,13 +780,30 @@ private:
         {
             while (engine_queue_.pop(task))
             {
+                if (task.type == EngineTask::SWITCH_ENGINE)
+                {
+                    // Safe without extra locking: this is the single engine-writer
+                    // thread, and the SPSC queue preserves order, so every
+                    // previously-queued ORDER/CANCEL task has already been applied
+                    // to the old engine before this task is popped.
+                    market_.set_engine_mode(task.engine_mode);
+                    for (const auto &company : market_.companies())
+                    {
+                        InstrumentState *inst = market_.find_instrument(company.id);
+                        if (inst)
+                            registry_.broadcast(book_to_json(*inst).dump());
+                    }
+                    registry_.broadcast(json{{"type", "engine_mode"}, {"mode", task.engine_mode == EngineMode::LEGACY ? "LEGACY" : "CURRENT"}}.dump());
+                    continue;
+                }
+
                 InstrumentState *instrument = market_.find_instrument(task.company_id);
                 if (!instrument)
                     continue;
 
                 if (task.type == EngineTask::ORDER)
                 {
-                    if (!instrument->book.can_process_order(task.order))
+                    if (!instrument->book->can_process_order(task.order))
                     {
                         {
                             std::lock_guard<std::mutex> q_lock(db_q_mutex_);
@@ -782,8 +820,8 @@ private:
                     else [[likely]]
                     {
                         uint32_t rejected_qty = task.order.side
-                            ? instrument->book.process_buy_order(task.order)
-                            : instrument->book.process_sell_order(task.order);
+                            ? instrument->book->process_buy_order(task.order)
+                            : instrument->book->process_sell_order(task.order);
 
                         registry_.broadcast(book_to_json(*instrument).dump());
 
@@ -806,7 +844,7 @@ private:
                 else if (task.type == EngineTask::CANCEL)
                 {
                     Order cancelled_order;
-                    if (instrument->book.cancel_order(task.order_id, task.user_id, cancelled_order))
+                    if (instrument->book->cancel_order(task.order_id, task.user_id, cancelled_order))
                     {
                         registry_.broadcast(book_to_json(*instrument).dump());
                         {
