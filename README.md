@@ -293,7 +293,9 @@ docker run -d -p 9001:9001 exchange-engine
 
 ## Testing
 
-Google Test suite in `tests/test_orderbook.cpp`:
+22 Google Test cases across 3 files, all built into one `tests` binary (`ctest` target `EngineTests`):
+
+**`tests/test_orderbook.cpp`** — `OrderBook` unit tests:
 
 |Test|What it verifies|
 |-|-|
@@ -304,8 +306,33 @@ Google Test suite in `tests/test_orderbook.cpp`:
 |`RestingOrderSnapshotsPreservePriorityAndQuantity`|Depth/order snapshots reflect correct price-time ordering and remaining quantity|
 |`SelfTradeBlocked`|A user can't trade against their own resting order|
 |`CancelRemovesOrder`|Cancellation removes the order and returns its quantity|
+|`CancelAfterPartialFillRefundsRemainderOnly`|Cancelling a partially-filled order returns only the unfilled remainder, not the original quantity|
+|`PoolExhaustionRejectsFurtherOrders`|Once the pre-allocated pool (`MAX_ORDERS`) is full, `can_process_order` rejects further orders instead of silently dropping them|
 
-CI/CD via GitHub Actions runs the full test suite on every push to `main`.
+**`tests/test_orderbook_legacy_parity.cpp`** — `OrderBook` vs `OrderBookLegacy`, identical input sequences:
+
+|Test|What it verifies|
+|-|-|
+|`BasicCrossingAndPartialFillsMatch`|Both engines produce identical trades and resting-book state|
+|`TimePriorityMatches`|Both engines resolve FIFO priority identically|
+|`SelfTradePreventionMatches`|Both engines reject self-trades identically|
+|`CancellationMatches`|Both engines produce identical post-cancellation book state|
+
+**`tests/test_database.cpp`** — `Database` wallet/settlement tests, each against a fresh `:memory:` SQLite instance:
+
+|Test|What it verifies|
+|-|-|
+|`CreateUserAndLogin`|Registration, duplicate-username rejection, login, session validation|
+|`NewUserStartsWithDefaultCashAndNoShares`|Default $10,000 balance, empty portfolio|
+|`ReserveCashRejectsInsufficientFunds`|Over-reservation is rejected and leaves the balance untouched|
+|`ReserveSharesRejectsWhenUserHoldsNone`|Can't reserve shares you don't own|
+|`ReleaseCashRefundsExactAmountReserved`|Refund restores exactly what was reserved|
+|`ReleaseSharesRefundsExactQuantityReserved`|Same, for share reservations|
+|`SettleTradeCreditsBuyerSharesAndSellerCash`|Settlement moves shares to buyer, cash to seller|
+|`SettleTradeRefundsBuyerOnPriceImprovement`|Buyer gets refunded the difference when filled better than their limit|
+|`LeaderboardOrdersByCashDescending`|Leaderboard ranks strictly by cash, highest first|
+
+CI/CD via GitHub Actions runs the full test suite (and builds the `benchmarks` target) on every push to `main`.
 
 ---
 

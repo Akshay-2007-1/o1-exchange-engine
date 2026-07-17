@@ -178,3 +178,47 @@ TEST(OrderBook, CancelRemovesOrder) {
     EXPECT_TRUE(book.bid_depth().empty());
     EXPECT_EQ(cancelled.quantity, 200u);
 }
+
+// ── Test 7: cancelling a partially-filled order only refunds the
+//    unfilled remainder — Server.h relies on cancelled_order.quantity
+//    to compute the wallet refund, so this is the critical invariant
+//    behind issue #4 (partial-fill-cancel-no-refund) staying fixed. ──
+TEST(OrderBook, CancelAfterPartialFillRefundsRemainderOnly) {
+    OrderBook book;
+
+    Order sell = {0, 1, 1000, 10000, 200, 1, false};
+    add_order(book, sell);
+
+    Order buy = {0, 2, 2000, 10000, 80, 1, true};
+    add_order(book, buy); // fills 80 of the resting 200
+
+    auto asks = book.ask_depth();
+    ASSERT_FALSE(asks.empty());
+    EXPECT_EQ(asks[0].quantity, 120u);
+
+    Order cancelled;
+    bool ok = book.cancel_order(sell.id, 1, cancelled);
+
+    EXPECT_TRUE(ok);
+    EXPECT_EQ(cancelled.quantity, 120u); // NOT the original 200
+    EXPECT_TRUE(book.ask_depth().empty());
+}
+
+// ── Test 8: once the pre-allocated node pool (MAX_ORDERS) is exhausted,
+//    can_process_order must reject further orders rather than silently
+//    dropping them — see issue #2 (pool-exhaustion-funds-stolen); the
+//    caller (Server.h) only refunds a rejected order's reservation if
+//    can_process_order said no *before* any reservation-consuming side
+//    effect happens inside the engine. ──
+TEST(OrderBook, PoolExhaustionRejectsFurtherOrders) {
+    OrderBook book;
+
+    for (uint32_t i = 0; i < MAX_ORDERS; ++i) {
+        Order o = {0, static_cast<int64_t>(i), i, (i % (MAX_PRICE - 1)) + 1, 1, 1, true};
+        ASSERT_TRUE(book.can_process_order(o)) << "order " << i << " should still fit in the pool";
+        book.process_buy_order(o);
+    }
+
+    Order overflow = {0, 999999, 999999, 500, 1, 1, true};
+    EXPECT_FALSE(book.can_process_order(overflow));
+}
