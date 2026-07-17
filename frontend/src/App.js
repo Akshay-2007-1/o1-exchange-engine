@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
+import StressTest from "./StressTest";
 
 // const WS_URL = process.env.REACT_APP_WS_URL || "ws://20.205.25.160:9001";
 const WS_URL = "ws://127.0.0.1:9001";
@@ -450,6 +451,7 @@ export default function App() {
   const [leaderboard, setLeaderboard] = useState([]);
   const [priceHistory, setPriceHistory] = useState({});
   const [myTrades, setMyTrades] = useState([]);
+  const [engineMode, setEngineMode] = useState("CURRENT");
 
   const showToast = (msg, kind = "fill") => {
     const id = Date.now() + Math.random();
@@ -616,7 +618,12 @@ export default function App() {
           applyTradeHistory(msg.trades || []);
         }
 
+        if (msg.type === "engine_mode") {
+          setEngineMode(msg.mode);
+        }
+
         if (msg.type === "book") {
+          if (msg.engine_mode) setEngineMode(msg.engine_mode);
           if (
             selectedCompanyIdRef.current === null ||
             Number(msg.company_id) === Number(selectedCompanyIdRef.current)
@@ -626,6 +633,7 @@ export default function App() {
         }
 
         if (msg.type === "snapshot") {
+          if (msg.engine_mode) setEngineMode(msg.engine_mode);
           if (Array.isArray(msg.companies)) {
             setCompanies(msg.companies);
           }
@@ -696,6 +704,12 @@ export default function App() {
     rowId: `${trade.buy_order_id}-${trade.sell_order_id}-${tradeSeq.current++}`,
     time
   });
+
+  const sendRaw = useCallback(obj => {
+    if (ws.current?.readyState === WebSocket.OPEN) {
+      ws.current.send(JSON.stringify(obj));
+    }
+  }, []);
 
   const handleLogin = (username, password) => {
     if (ws.current?.readyState === WebSocket.OPEN) {
@@ -1117,6 +1131,13 @@ export default function App() {
         
         <MyOrdersPanel orders={myOpenOrders} onCancel={cancelOrder} companies={companies} />
         <MyTradesPanel trades={myTrades} userId={user?.userId} companies={companies} />
+        <StressTest
+          send={sendRaw}
+          engineMode={engineMode}
+          companies={companies}
+          token={user?.token}
+          connected={connected}
+        />
       </div>
       <ToastStack toasts={toasts} />
     </main>

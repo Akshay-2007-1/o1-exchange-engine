@@ -736,3 +736,120 @@ option {
       margin-top: 8px;
   }
 }
+
+/* Stress Test panel */
+.stress-test-body {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+}
+
+.stress-test-row {
+  display: grid;
+  grid-template-columns: 140px 1fr;
+  align-items: center;
+  gap: 12px;
+}
+
+.stress-test-label {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.stress-test-row input,
+.stress-test-row select {
+  background: #101317;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 8px 10px;
+  font-size: 14px;
+}
+
+.engine-toggle button {
+  font-size: 12px;
+}
+
+.preset-group {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.preset-group button {
+  padding: 8px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: #101317;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.preset-group button.active {
+  border-color: var(--buy);
+  color: var(--buy);
+  background: var(--buy-soft);
+}
+
+.preset-group button:disabled,
+.stress-test-controls button:disabled,
+.stress-test-row input:disabled,
+.stress-test-row select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.stress-test-controls {
+  display: flex;
+  gap: 10px;
+}
+
+.stress-test-controls button {
+  flex: 1;
+  min-height: 42px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.stress-test-controls button:not(.submit-order) {
+  background: #101317;
+  border: 1px solid var(--line);
+  color: var(--text);
+}
+
+.stress-test-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  padding-top: 4px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.stress-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.stress-stat-label {
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.stress-stat-value {
+  font-size: 18px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.stress-test-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
