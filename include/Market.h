@@ -77,7 +77,7 @@ public:
     EngineMode engine_mode() const { return engine_mode_; }
 
     // Re-initializes every instrument with a fresh, empty book of the given
-    // engine. All resting orders across the market are discarded — this is a
+    // engine. All resting orders across the market are discarded - this is a
     // stress-test/benchmark control, not something used during normal trading.
     // Caller must only invoke this from the single-writer engine thread with
     // its task queue drained, since it replaces IOrderBook instances other

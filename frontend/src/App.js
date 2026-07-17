@@ -583,7 +583,7 @@ export default function App() {
           setLastError(msg.message);
           // Only ever rendered once the dashboard (with <ToastStack/>) is
           // mounted; harmless no-op otherwise, so no need to gate on `view`
-          // here (which would be a stale closure — see selectedCompanyIdRef
+          // here (which would be a stale closure - see selectedCompanyIdRef
           // for why this handler can't read live state directly).
           showToast(msg.message, "error");
         }

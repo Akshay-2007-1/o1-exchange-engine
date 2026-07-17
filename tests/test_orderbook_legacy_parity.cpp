@@ -1,5 +1,5 @@
 // OrderBookLegacy exists purely as a benchmarking baseline (see
-// benchmark/benchmark_orderbook.cpp and StressTest.js's engine toggle) — it
+// benchmark/benchmark_orderbook.cpp and StressTest.js's engine toggle) - it
 // is only useful if it actually behaves like OrderBook. These tests run
 // identical order sequences through both engines and assert on identical
 // trade output and identical resting-book state.
@@ -138,7 +138,7 @@ TEST(OrderBookLegacyParity, SelfTradePreventionMatches)
     {
         Order sell = {0, 42, 1000, 10000, 100, 1, false};
         submit(book, sell);
-        Order buy = {0, 42, 2000, 10000, 100, 1, true}; // same user — should reject, not fill
+        Order buy = {0, 42, 2000, 10000, 100, 1, true}; // same user - should reject, not fill
         submit(book, buy);
     };
 

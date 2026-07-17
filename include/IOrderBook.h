@@ -95,7 +95,7 @@ public:
     virtual uint32_t best_bid() const = 0;
     virtual uint32_t best_ask() const = 0;
 
-    // "CURRENT" (O(1) bitmap) or "LEGACY" (std::map baseline) — surfaced to
+    // "CURRENT" (O(1) bitmap) or "LEGACY" (std::map baseline) - surfaced to
     // the stress-test UI/metrics so clients know which engine produced a result.
     virtual const char *engine_name() const = 0;
 };

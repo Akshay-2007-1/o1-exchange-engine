@@ -42,7 +42,7 @@ TEST(OrderBook, FullFill) {
     EXPECT_TRUE(book.ask_depth().empty());
 }
 
-// ── Test 2: partial fill — buyer wants more than available ──
+// ── Test 2: partial fill - buyer wants more than available ──
 TEST(OrderBook, PartialFill) {
     OrderBook book;
     MockListener listener;
@@ -67,7 +67,7 @@ TEST(OrderBook, PartialFill) {
     EXPECT_EQ(bid_snaps[0].quantity, 200);
 }
 
-// ── Test 3: no match — prices don't cross ──
+// ── Test 3: no match - prices don't cross ──
 TEST(OrderBook, NoMatch) {
     OrderBook book;
     MockListener listener;
@@ -84,7 +84,7 @@ TEST(OrderBook, NoMatch) {
     EXPECT_FALSE(book.ask_depth().empty());
 }
 
-// ── Test 4: time priority — earlier order fills first ──
+// ── Test 4: time priority - earlier order fills first ──
 TEST(OrderBook, TimePriority) {
     OrderBook book;
     MockListener listener;
@@ -153,7 +153,7 @@ TEST(OrderBook, SelfTradeBlocked) {
     Order sell = {0, 42, 1000, 10000, 100, 1, false};
     add_order(book, sell);
 
-    // Same user places a crossing buy — should be rejected
+    // Same user places a crossing buy - should be rejected
     Order buy = {0, 42, 2000, 10000, 100, 1, true};
     uint32_t rejected = add_order(book, buy);
 
@@ -180,7 +180,7 @@ TEST(OrderBook, CancelRemovesOrder) {
 }
 
 // ── Test 7: cancelling a partially-filled order only refunds the
-//    unfilled remainder — Server.h relies on cancelled_order.quantity
+//    unfilled remainder - Server.h relies on cancelled_order.quantity
 //    to compute the wallet refund, so this is the critical invariant
 //    behind issue #4 (partial-fill-cancel-no-refund) staying fixed. ──
 TEST(OrderBook, CancelAfterPartialFillRefundsRemainderOnly) {
@@ -206,7 +206,7 @@ TEST(OrderBook, CancelAfterPartialFillRefundsRemainderOnly) {
 
 // ── Test 8: once the pre-allocated node pool (MAX_ORDERS) is exhausted,
 //    can_process_order must reject further orders rather than silently
-//    dropping them — see issue #2 (pool-exhaustion-funds-stolen); the
+//    dropping them - see issue #2 (pool-exhaustion-funds-stolen); the
 //    caller (Server.h) only refunds a rejected order's reservation if
 //    can_process_order said no *before* any reservation-consuming side
 //    effect happens inside the engine. ──
