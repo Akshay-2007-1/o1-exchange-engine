@@ -513,7 +513,7 @@ private:
                     uint32_t ref_price = inst->book->best_ask();
                     if (ref_price == NULL_IDX)
                     {
-                        send(json{{"type", "error"}, {"message", "No asks in book — market buy cannot execute."}}.dump());
+                        send(json{{"type", "error"}, {"message", "No asks in book - market buy cannot execute."}}.dump());
                         return;
                     }
                     double required_cash = (static_cast<double>(ref_price) / 100.0) * quantity;
@@ -540,7 +540,7 @@ private:
                     uint32_t ref_price = inst->book->best_bid();
                     if (ref_price == NULL_IDX)
                     {
-                        send(json{{"type", "error"}, {"message", "No bids in book — market sell cannot execute."}}.dump());
+                        send(json{{"type", "error"}, {"message", "No bids in book - market sell cannot execute."}}.dump());
                         return;
                     }
                     auto check = db_.reserve_shares(user_id, company_id, quantity);
@@ -594,9 +594,9 @@ private:
 
                 // Stress-test orders benchmark the matching engine only. They carry
                 // a synthetic negative user_id (never a real account) so wallet
-                // reservation/settlement is skipped entirely — settle_trade/
+                // reservation/settlement is skipped entirely - settle_trade/
                 // release_cash/release_shares simply no-op on a user_id that
-                // matches no DB row — and self-trade prevention doesn't constantly
+                // matches no DB row - and self-trade prevention doesn't constantly
                 // trip against a single real account submitting every order.
                 const bool is_stress = msg.value("stress", false);
                 int64_t user_id = session_result.id;
@@ -899,7 +899,7 @@ private:
     // Called continuously from the engine thread's busy-poll loop (never
     // blocks: just a cheap timestamp check most iterations). Every
     // METRICS_INTERVAL_ of wall-clock time, summarizes matching-engine
-    // latency (process_buy_order/process_sell_order only — not WS/DB time)
+    // latency (process_buy_order/process_sell_order only - not WS/DB time)
     // over the window and broadcasts it, then resets the window. This is
     // what backs the live throughput/latency charts in the stress-test UI.
     void maybe_emit_metrics()

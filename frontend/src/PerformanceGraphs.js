@@ -45,7 +45,7 @@ export default function PerformanceGraphs({ metrics }) {
   const summary = useMemo(() => summarize(metrics), [metrics]);
   const recent = useMemo(() => metrics.slice(-60), [metrics]);
   const latest = recent[recent.length - 1];
-  // Prefer the most recent tick that actually processed orders — otherwise a
+  // Prefer the most recent tick that actually processed orders - otherwise a
   // trailing idle tick (0 ops/sec) right after a burst makes the summary
   // numbers look stale/wrong next to a sparkline still showing the peak.
   const latestActive = [...recent].reverse().find(m => m.orders_processed > 0) || latest;
@@ -94,8 +94,8 @@ export default function PerformanceGraphs({ metrics }) {
         </div>
 
         <p className="stress-test-note">
-          Latency measures only the matching call itself (process_buy_order/process_sell_order) — not
-          WebSocket or database time — so CURRENT vs LEGACY reflects the engine, not network conditions.
+          Latency measures only the matching call itself (process_buy_order/process_sell_order) - not
+          WebSocket or database time - so CURRENT vs LEGACY reflects the engine, not network conditions.
         </p>
       </div>
     </section>
