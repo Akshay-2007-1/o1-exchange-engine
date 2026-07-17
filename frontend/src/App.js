@@ -278,7 +278,7 @@ function ToastStack({ toasts }) {
           boxShadow: "0 2px 12px rgba(0,0,0,0.4)",
           animation: "fadeInUp 0.2s ease"
         }}>
-          {t.kind === "error" ? "⚠" : "✓"} {t.msg}
+          {t.kind === "error" ? "⚠" : "✓"} {t.msg}{t.count > 1 ? ` ×${t.count}` : ""}
         </div>
       ))}
     </div>
@@ -456,10 +456,27 @@ export default function App() {
   const [metrics, setMetrics] = useState([]);
   const [gameState, setGameState] = useState(null);
 
+  // Keyed by message+kind (not a random id) so a rapidly repeating error -
+  // e.g. self-trade-prevention rejections during a stress-test burst, which
+  // are expected/frequent at scale, not something the user needs one alert
+  // per occurrence for - collapses into a single toast with a "xN" counter
+  // instead of stacking dozens of identical toasts and covering the UI.
+  const toastTimers = useRef({});
+
   const showToast = (msg, kind = "fill") => {
-    const id = Date.now() + Math.random();
-    setToasts(prev => [...prev, { id, msg, kind }]);
-    setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 4000);
+    const key = `${kind}:${msg}`;
+    setToasts(prev => {
+      const existing = prev.find(t => t.id === key);
+      if (existing) {
+        return prev.map(t => (t.id === key ? { ...t, count: t.count + 1 } : t));
+      }
+      return [...prev, { id: key, msg, kind, count: 1 }];
+    });
+    if (toastTimers.current[key]) clearTimeout(toastTimers.current[key]);
+    toastTimers.current[key] = setTimeout(() => {
+      setToasts(prev => prev.filter(t => t.id !== key));
+      delete toastTimers.current[key];
+    }, 4000);
   };
 
   const applyBookSnapshot = useCallback(msg => {
