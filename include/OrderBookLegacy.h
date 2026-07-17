@@ -7,7 +7,7 @@
 
 // Deliberately naive O(log N) matching engine (the "LEGACY" baseline).
 // std::map price levels + std::list FIFO queues + heap-allocated nodes via
-// the STL containers themselves — no bitmap, no pre-allocated pool. Exists
+// the STL containers themselves - no bitmap, no pre-allocated pool. Exists
 // only so the stress-test UI can benchmark it against the O(1) OrderBook
 // and show the speedup concretely. Must produce identical trade sequences
 // to OrderBook for identical input, including the self-trade-prevention
@@ -90,7 +90,7 @@ private:
         std::list<Order>::iterator node_it;
     };
 
-    // Highest price first for bids, lowest price first for asks — matches
+    // Highest price first for bids, lowest price first for asks - matches
     // OrderBook's best-price-first iteration order.
     std::map<uint32_t, PriceLevel, std::greater<uint32_t>> bids_;
     std::map<uint32_t, PriceLevel, std::less<uint32_t>> asks_;

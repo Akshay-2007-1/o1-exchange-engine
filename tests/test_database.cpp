@@ -142,7 +142,7 @@ TEST_F(DatabaseTest, SettleTradeRefundsBuyerOnPriceImprovement)
     ASSERT_TRUE(buyer.ok);
     ASSERT_TRUE(seller.ok);
 
-    // Buyer's limit was $110, but it filled at $100 — buyer should be
+    // Buyer's limit was $110, but it filled at $100 - buyer should be
     // refunded the $10/share difference on top of the settlement.
     db.settle_trade(buyer.id, seller.id, 1, /*quantity=*/20, /*price=*/10000, /*buyer_limit_price=*/11000);
 

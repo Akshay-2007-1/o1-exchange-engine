@@ -16,7 +16,7 @@ namespace
 {
 
 // Deterministic per-benchmark RNG so CURRENT and LEGACY see identical order
-// sequences — the comparison isolates the engine, not the input.
+// sequences - the comparison isolates the engine, not the input.
 std::vector<Order> make_crossing_orders(int n, uint32_t base_price)
 {
     std::vector<Order> orders;
@@ -37,7 +37,7 @@ std::vector<Order> make_crossing_orders(int n, uint32_t base_price)
 
 std::vector<Order> make_resting_orders(int n, std::mt19937 &rng)
 {
-    // Buys and sells occupy disjoint price ranges so nothing crosses — this
+    // Buys and sells occupy disjoint price ranges so nothing crosses - this
     // isolates insertion/depth-tracking cost from matching cost.
     std::uniform_int_distribution<uint32_t> bid_price(1, 40000);
     std::uniform_int_distribution<uint32_t> ask_price(60000, 99999);
@@ -72,7 +72,7 @@ void submit(Book &book, Order &order)
 
 } // namespace
 
-// ── Scenario 1: simple matching — every order fully crosses immediately ──
+// ── Scenario 1: simple matching - every order fully crosses immediately ──
 template <typename Book>
 static void BM_SimpleMatching(benchmark::State &state)
 {
@@ -92,7 +92,7 @@ static void BM_SimpleMatching(benchmark::State &state)
 BENCHMARK_TEMPLATE(BM_SimpleMatching, OrderBook)->Arg(1000)->Arg(10000)->Arg(100000);
 BENCHMARK_TEMPLATE(BM_SimpleMatching, OrderBookLegacy)->Arg(1000)->Arg(10000)->Arg(100000);
 
-// ── Scenario 2: book building — resting orders across many price levels ──
+// ── Scenario 2: book building - resting orders across many price levels ──
 template <typename Book>
 static void BM_BookBuilding(benchmark::State &state)
 {
@@ -113,7 +113,7 @@ static void BM_BookBuilding(benchmark::State &state)
 BENCHMARK_TEMPLATE(BM_BookBuilding, OrderBook)->Arg(1000)->Arg(10000)->Arg(100000);
 BENCHMARK_TEMPLATE(BM_BookBuilding, OrderBookLegacy)->Arg(1000)->Arg(10000)->Arg(100000);
 
-// ── Scenario 3: partial fills — one large resting order, many small takers ──
+// ── Scenario 3: partial fills - one large resting order, many small takers ──
 template <typename Book>
 static void BM_PartialFills(benchmark::State &state)
 {
@@ -154,7 +154,7 @@ static void BM_PartialFills(benchmark::State &state)
 BENCHMARK_TEMPLATE(BM_PartialFills, OrderBook)->Arg(1000)->Arg(10000)->Arg(100000);
 BENCHMARK_TEMPLATE(BM_PartialFills, OrderBookLegacy)->Arg(1000)->Arg(10000)->Arg(100000);
 
-// ── Scenario 4: cancellations — build a resting book, then cancel it all ──
+// ── Scenario 4: cancellations - build a resting book, then cancel it all ──
 template <typename Book>
 static void BM_Cancellations(benchmark::State &state)
 {
