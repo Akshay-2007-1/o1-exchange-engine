@@ -644,10 +644,9 @@ export default function App() {
           }
           applyTradeHistory(msg.trades || []);
           applyBookSnapshot(msg);
-          if (Array.isArray(msg.trades) && msg.trades.length > 0) {
+          if (Array.isArray(msg.price_history)) {
             const cid = msg.company_id;
-            const prices = [...msg.trades].reverse().map(t => t.price);
-            setPriceHistory(prev => ({ ...prev, [cid]: prices.slice(-60) }));
+            setPriceHistory(prev => ({ ...prev, [cid]: msg.price_history.slice(-60) }));
           }
         }
 

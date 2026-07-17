@@ -161,7 +161,7 @@ inline json profile_to_json(const Database::UserProfile &profile)
         {"portfolio", portfolio}};
 }
 
-inline json snapshot_to_json(const InstrumentState &instrument, const json &history, const std::vector<Company> &companies)
+inline json snapshot_to_json(const InstrumentState &instrument, const json &history, const std::vector<Company> &companies, const std::vector<uint32_t> &price_history)
 {
     return {
         {"type", "snapshot"},
@@ -171,6 +171,7 @@ inline json snapshot_to_json(const InstrumentState &instrument, const json &hist
         {"total_shares", instrument.company.total_shares},
         {"companies", companies_to_json(companies)},
         {"trades", history.value("trades", json::array())},
+        {"price_history", price_history},
         {"engine_mode", instrument.book->engine_name()},
         {"bids", depth_to_json(instrument.book->bid_depth())},
         {"asks", depth_to_json(instrument.book->ask_depth())},
@@ -883,7 +884,9 @@ private:
                 else if (task.type == EngineTask::SNAPSHOT)
                 {
                     json history = history_.to_json();
-                    std::string msg = snapshot_to_json(*instrument, history, market_.companies()).dump();
+                    auto price_history = db_.get_recent_prices(task.company_id, 60);
+                    std::reverse(price_history.begin(), price_history.end()); // oldest -> newest
+                    std::string msg = snapshot_to_json(*instrument, history, market_.companies(), price_history).dump();
                     if (task.session)
                         task.session->send(msg);
                 }
