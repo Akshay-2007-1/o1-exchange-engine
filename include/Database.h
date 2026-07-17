@@ -8,6 +8,8 @@
 #include <ctime>
 #include <random>
 #include <mutex>
+#include <vector>
+#include <optional>
 
 class Database {
 public:
@@ -387,7 +389,162 @@ public:
         release_shares_unlocked(user_id, company_id, quantity);
     }
 
+    // ---- Game Mode (Market Making Practice) ----
+    // These methods only ever touch game_sessions/game_rounds - never
+    // balances, portfolios, or the trades table - so the game's synthetic
+    // P&L is structurally isolated from the real wallet/leaderboard, not
+    // just isolated by convention.
+
+    struct GameSessionRow {
+        int64_t id;
+        int64_t user_id;
+        int scenario_id;
+        int max_rounds;
+        int current_round;
+        double position;
+        double cash;
+        std::string hints_revealed_csv;
+        std::string status;
+    };
+
+    struct GameRoundRow {
+        int round_number;
+        double bid;
+        double ask;
+        std::string verdict;
+        std::optional<double> fill_price;
+        int64_t ts;
+    };
+
+    Result create_game_session(int64_t user_id, int scenario_id, int max_rounds) {
+        int64_t now = static_cast<int64_t>(std::time(nullptr));
+        std::lock_guard<std::mutex> lock(db_mutex_);
+
+        sqlite3_clear_bindings(stmt_game_create_);
+        sqlite3_bind_int64(stmt_game_create_, 1, user_id);
+        sqlite3_bind_int(stmt_game_create_, 2, scenario_id);
+        sqlite3_bind_int(stmt_game_create_, 3, max_rounds);
+        sqlite3_bind_int64(stmt_game_create_, 4, now);
+        sqlite3_bind_int64(stmt_game_create_, 5, now);
+
+        int rc = sqlite3_step(stmt_game_create_);
+        sqlite3_reset(stmt_game_create_);
+
+        if (rc != SQLITE_DONE) return {false, std::string("DB error: ") + sqlite3_errmsg(db_)};
+        return {true, "", sqlite3_last_insert_rowid(db_)};
+    }
+
+    std::optional<GameSessionRow> get_active_game_session(int64_t user_id) {
+        std::lock_guard<std::mutex> lock(db_mutex_);
+        sqlite3_clear_bindings(stmt_game_get_active_);
+        sqlite3_bind_int64(stmt_game_get_active_, 1, user_id);
+
+        std::optional<GameSessionRow> result;
+        if (sqlite3_step(stmt_game_get_active_) == SQLITE_ROW) {
+            result = read_game_session_row(stmt_game_get_active_);
+        }
+        sqlite3_reset(stmt_game_get_active_);
+        return result;
+    }
+
+    std::optional<GameSessionRow> get_game_session(int64_t session_id, int64_t user_id) {
+        std::lock_guard<std::mutex> lock(db_mutex_);
+        sqlite3_clear_bindings(stmt_game_get_by_id_);
+        sqlite3_bind_int64(stmt_game_get_by_id_, 1, session_id);
+        sqlite3_bind_int64(stmt_game_get_by_id_, 2, user_id);
+
+        std::optional<GameSessionRow> result;
+        if (sqlite3_step(stmt_game_get_by_id_) == SQLITE_ROW) {
+            result = read_game_session_row(stmt_game_get_by_id_);
+        }
+        sqlite3_reset(stmt_game_get_by_id_);
+        return result;
+    }
+
+    void update_game_session_state(int64_t session_id, int current_round, double position,
+                                    double cash, const std::string& hints_revealed_csv) {
+        int64_t now = static_cast<int64_t>(std::time(nullptr));
+        std::lock_guard<std::mutex> lock(db_mutex_);
+        sqlite3_clear_bindings(stmt_game_update_state_);
+        sqlite3_bind_int(stmt_game_update_state_, 1, current_round);
+        sqlite3_bind_double(stmt_game_update_state_, 2, position);
+        sqlite3_bind_double(stmt_game_update_state_, 3, cash);
+        sqlite3_bind_text(stmt_game_update_state_, 4, hints_revealed_csv.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int64(stmt_game_update_state_, 5, now);
+        sqlite3_bind_int64(stmt_game_update_state_, 6, session_id);
+        sqlite3_step(stmt_game_update_state_);
+        sqlite3_reset(stmt_game_update_state_);
+    }
+
+    void end_game_session(int64_t session_id) {
+        int64_t now = static_cast<int64_t>(std::time(nullptr));
+        std::lock_guard<std::mutex> lock(db_mutex_);
+        sqlite3_clear_bindings(stmt_game_end_);
+        sqlite3_bind_int64(stmt_game_end_, 1, now);
+        sqlite3_bind_int64(stmt_game_end_, 2, session_id);
+        sqlite3_step(stmt_game_end_);
+        sqlite3_reset(stmt_game_end_);
+    }
+
+    void append_game_round(int64_t session_id, int round_number, double bid, double ask,
+                            const std::string& verdict, std::optional<double> fill_price) {
+        int64_t now = static_cast<int64_t>(std::time(nullptr));
+        std::lock_guard<std::mutex> lock(db_mutex_);
+        sqlite3_clear_bindings(stmt_game_round_insert_);
+        sqlite3_bind_int64(stmt_game_round_insert_, 1, session_id);
+        sqlite3_bind_int(stmt_game_round_insert_, 2, round_number);
+        sqlite3_bind_double(stmt_game_round_insert_, 3, bid);
+        sqlite3_bind_double(stmt_game_round_insert_, 4, ask);
+        sqlite3_bind_text(stmt_game_round_insert_, 5, verdict.c_str(), -1, SQLITE_TRANSIENT);
+        if (fill_price.has_value())
+            sqlite3_bind_double(stmt_game_round_insert_, 6, *fill_price);
+        else
+            sqlite3_bind_null(stmt_game_round_insert_, 6);
+        sqlite3_bind_int64(stmt_game_round_insert_, 7, now);
+        sqlite3_step(stmt_game_round_insert_);
+        sqlite3_reset(stmt_game_round_insert_);
+    }
+
+    std::vector<GameRoundRow> get_game_rounds(int64_t session_id) {
+        std::vector<GameRoundRow> rows;
+        std::lock_guard<std::mutex> lock(db_mutex_);
+        sqlite3_clear_bindings(stmt_game_rounds_get_);
+        sqlite3_bind_int64(stmt_game_rounds_get_, 1, session_id);
+        while (sqlite3_step(stmt_game_rounds_get_) == SQLITE_ROW) {
+            GameRoundRow r;
+            r.round_number = sqlite3_column_int(stmt_game_rounds_get_, 0);
+            r.bid = sqlite3_column_double(stmt_game_rounds_get_, 1);
+            r.ask = sqlite3_column_double(stmt_game_rounds_get_, 2);
+            const char* verdict = reinterpret_cast<const char*>(sqlite3_column_text(stmt_game_rounds_get_, 3));
+            r.verdict = verdict ? verdict : "PASS";
+            if (sqlite3_column_type(stmt_game_rounds_get_, 4) == SQLITE_NULL)
+                r.fill_price = std::nullopt;
+            else
+                r.fill_price = sqlite3_column_double(stmt_game_rounds_get_, 4);
+            r.ts = sqlite3_column_int64(stmt_game_rounds_get_, 5);
+            rows.push_back(r);
+        }
+        sqlite3_reset(stmt_game_rounds_get_);
+        return rows;
+    }
+
 private:
+    GameSessionRow read_game_session_row(sqlite3_stmt* stmt) {
+        GameSessionRow row;
+        row.id = sqlite3_column_int64(stmt, 0);
+        row.user_id = sqlite3_column_int64(stmt, 1);
+        row.scenario_id = sqlite3_column_int(stmt, 2);
+        row.max_rounds = sqlite3_column_int(stmt, 3);
+        row.current_round = sqlite3_column_int(stmt, 4);
+        row.position = sqlite3_column_double(stmt, 5);
+        row.cash = sqlite3_column_double(stmt, 6);
+        const char* hints = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 7));
+        row.hints_revealed_csv = hints ? hints : "";
+        const char* status = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 8));
+        row.status = status ? status : "active";
+        return row;
+    }
+
     sqlite3* db_ = nullptr;
     std::mutex db_mutex_;
 
@@ -410,6 +567,13 @@ private:
     sqlite3_stmt* stmt_log_trade_ = nullptr;
     sqlite3_stmt* stmt_get_user_trades_ = nullptr;
     sqlite3_stmt* stmt_get_recent_prices_ = nullptr;
+    sqlite3_stmt* stmt_game_create_ = nullptr;
+    sqlite3_stmt* stmt_game_get_active_ = nullptr;
+    sqlite3_stmt* stmt_game_get_by_id_ = nullptr;
+    sqlite3_stmt* stmt_game_update_state_ = nullptr;
+    sqlite3_stmt* stmt_game_end_ = nullptr;
+    sqlite3_stmt* stmt_game_round_insert_ = nullptr;
+    sqlite3_stmt* stmt_game_rounds_get_ = nullptr;
 
     void initialise() {
         // High-performance SQLite pragmas
@@ -455,6 +619,36 @@ private:
                 quantity   INTEGER NOT NULL,
                 ts         INTEGER NOT NULL
             );
+
+            -- ---- Game Mode (Market Making Practice) ----
+            -- Fully separate from balances/portfolios: game P&L is synthetic
+            -- and never touches the real wallet or leaderboard.
+            CREATE TABLE IF NOT EXISTS game_sessions (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id        INTEGER NOT NULL,
+                scenario_id    INTEGER NOT NULL,
+                max_rounds     INTEGER NOT NULL,
+                current_round  INTEGER NOT NULL DEFAULT 0,
+                position       REAL NOT NULL DEFAULT 0,
+                cash           REAL NOT NULL DEFAULT 0,
+                hints_revealed TEXT NOT NULL DEFAULT '',
+                status         TEXT NOT NULL DEFAULT 'active',
+                created_at     INTEGER NOT NULL,
+                updated_at     INTEGER NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS game_rounds (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id    INTEGER NOT NULL,
+                round_number  INTEGER NOT NULL,
+                bid           REAL NOT NULL,
+                ask           REAL NOT NULL,
+                verdict       TEXT NOT NULL,
+                fill_price    REAL,
+                ts            INTEGER NOT NULL,
+                FOREIGN KEY (session_id) REFERENCES game_sessions(id)
+            );
         )";
 
         char* err = nullptr;
@@ -493,6 +687,30 @@ private:
         sqlite3_prepare_v2(db_, "INSERT INTO trades (company_id, buyer_id, seller_id, price, quantity, ts) VALUES (?,?,?,?,?,?);", -1, &stmt_log_trade_, nullptr);
         sqlite3_prepare_v2(db_, "SELECT company_id, buyer_id, seller_id, price, quantity, ts FROM trades WHERE buyer_id = ? OR seller_id = ? ORDER BY ts DESC, id DESC LIMIT ?;", -1, &stmt_get_user_trades_, nullptr);
         sqlite3_prepare_v2(db_, "SELECT price FROM trades WHERE company_id = ? ORDER BY ts DESC, id DESC LIMIT ?;", -1, &stmt_get_recent_prices_, nullptr);
+
+        sqlite3_prepare_v2(db_,
+            "INSERT INTO game_sessions (user_id, scenario_id, max_rounds, created_at, updated_at) VALUES (?, ?, ?, ?, ?);",
+            -1, &stmt_game_create_, nullptr);
+        sqlite3_prepare_v2(db_,
+            "SELECT id, user_id, scenario_id, max_rounds, current_round, position, cash, hints_revealed, status "
+            "FROM game_sessions WHERE user_id = ? AND status = 'active' ORDER BY id DESC LIMIT 1;",
+            -1, &stmt_game_get_active_, nullptr);
+        sqlite3_prepare_v2(db_,
+            "SELECT id, user_id, scenario_id, max_rounds, current_round, position, cash, hints_revealed, status "
+            "FROM game_sessions WHERE id = ? AND user_id = ?;",
+            -1, &stmt_game_get_by_id_, nullptr);
+        sqlite3_prepare_v2(db_,
+            "UPDATE game_sessions SET current_round = ?, position = ?, cash = ?, hints_revealed = ?, updated_at = ? WHERE id = ?;",
+            -1, &stmt_game_update_state_, nullptr);
+        sqlite3_prepare_v2(db_,
+            "UPDATE game_sessions SET status = 'ended', updated_at = ? WHERE id = ?;",
+            -1, &stmt_game_end_, nullptr);
+        sqlite3_prepare_v2(db_,
+            "INSERT INTO game_rounds (session_id, round_number, bid, ask, verdict, fill_price, ts) VALUES (?, ?, ?, ?, ?, ?, ?);",
+            -1, &stmt_game_round_insert_, nullptr);
+        sqlite3_prepare_v2(db_,
+            "SELECT round_number, bid, ask, verdict, fill_price, ts FROM game_rounds WHERE session_id = ? ORDER BY round_number;",
+            -1, &stmt_game_rounds_get_, nullptr);
     }
 
     void finalize_statements() {
@@ -514,6 +732,13 @@ private:
         sqlite3_finalize(stmt_log_trade_);
         sqlite3_finalize(stmt_get_user_trades_);
         sqlite3_finalize(stmt_get_recent_prices_);
+        sqlite3_finalize(stmt_game_create_);
+        sqlite3_finalize(stmt_game_get_active_);
+        sqlite3_finalize(stmt_game_get_by_id_);
+        sqlite3_finalize(stmt_game_update_state_);
+        sqlite3_finalize(stmt_game_end_);
+        sqlite3_finalize(stmt_game_round_insert_);
+        sqlite3_finalize(stmt_game_rounds_get_);
     }
 
     std::string generate_token() {

@@ -19,6 +19,8 @@
 #include <algorithm>
 #include "Market.h"
 #include "Database.h"
+#include "GameManager.h"
+#include "GameScenarios.h"
 
 namespace beast = boost::beast;
 namespace websocket = beast::websocket;
@@ -237,8 +239,8 @@ class Session : public std::enable_shared_from_this<Session>
 {
 public:
     Session(tcp::socket socket, MarketState &market, SessionRegistry &registry,
-            std::atomic<uint64_t> &next_order_id, Database &db, EngineQueue &engine_queue)
-        : ws_(std::move(socket)), market_(market), registry_(registry), next_order_id_(next_order_id), default_company_id_(market.default_company_id()), db_(db), engine_queue_(engine_queue) {}
+            std::atomic<uint64_t> &next_order_id, Database &db, EngineQueue &engine_queue, GameManager &game)
+        : ws_(std::move(socket)), market_(market), registry_(registry), next_order_id_(next_order_id), default_company_id_(market.default_company_id()), db_(db), engine_queue_(engine_queue), game_(game) {}
 
     void start()
     {
@@ -454,6 +456,121 @@ private:
                 return;
             }
 
+            // ---- Game Mode (Market Making Practice) ----
+            // Handled synchronously, inline - there's no order-book state to
+            // serialize against, and a round needs its verdict back in the
+            // same request/response turn, which the fire-and-forget
+            // EngineTask/SPSC-queue path doesn't support.
+            if (type == "game_start")
+            {
+                std::string token = msg.value("token", "");
+                auto auth = db_.validate_session(token);
+                if (!auth.ok)
+                {
+                    send(json{{"type", "error"}, {"message", "Authentication required/invalid."}}.dump());
+                    return;
+                }
+                current_user_id_ = auth.id;
+                std::string category = msg.value("category", "");
+                bool force_new = msg.value("force_new", false);
+                try
+                {
+                    for (const auto &m : game_.start_session(current_user_id_, category, force_new))
+                        send(m.dump());
+                }
+                catch (const GameError &e)
+                {
+                    send(json{{"type", "error"}, {"message", e.what()}}.dump());
+                }
+                return;
+            }
+
+            if (type == "game_quote")
+            {
+                if (!msg.contains("session_id") || !msg.contains("bid") || !msg.contains("ask"))
+                {
+                    send(json{{"type", "error"}, {"message", "Missing required fields for game_quote."}}.dump());
+                    return;
+                }
+                std::string token = msg.value("token", "");
+                auto auth = db_.validate_session(token);
+                if (!auth.ok)
+                {
+                    send(json{{"type", "error"}, {"message", "Authentication required/invalid."}}.dump());
+                    return;
+                }
+                current_user_id_ = auth.id;
+                int64_t session_id = msg["session_id"].get<int64_t>();
+                double bid = msg["bid"].get<double>();
+                double ask = msg["ask"].get<double>();
+                try
+                {
+                    for (const auto &m : game_.submit_quote(current_user_id_, session_id, bid, ask))
+                        send(m.dump());
+                }
+                catch (const GameError &e)
+                {
+                    send(json{{"type", "error"}, {"message", e.what()}}.dump());
+                }
+                return;
+            }
+
+            if (type == "game_hint")
+            {
+                if (!msg.contains("session_id"))
+                {
+                    send(json{{"type", "error"}, {"message", "Missing session_id for game_hint."}}.dump());
+                    return;
+                }
+                std::string token = msg.value("token", "");
+                auto auth = db_.validate_session(token);
+                if (!auth.ok)
+                {
+                    send(json{{"type", "error"}, {"message", "Authentication required/invalid."}}.dump());
+                    return;
+                }
+                current_user_id_ = auth.id;
+                int64_t session_id = msg["session_id"].get<int64_t>();
+                try
+                {
+                    for (const auto &m : game_.request_hint(current_user_id_, session_id))
+                        send(m.dump());
+                }
+                catch (const GameError &e)
+                {
+                    send(json{{"type", "error"}, {"message", e.what()}}.dump());
+                }
+                return;
+            }
+
+            if (type == "game_end")
+            {
+                if (!msg.contains("session_id"))
+                {
+                    send(json{{"type", "error"}, {"message", "Missing session_id for game_end."}}.dump());
+                    return;
+                }
+                std::string token = msg.value("token", "");
+                auto auth = db_.validate_session(token);
+                if (!auth.ok)
+                {
+                    send(json{{"type", "error"}, {"message", "Authentication required/invalid."}}.dump());
+                    return;
+                }
+                current_user_id_ = auth.id;
+                int64_t session_id = msg["session_id"].get<int64_t>();
+                try
+                {
+                    for (const auto &m : game_.end_session(current_user_id_, session_id))
+                        send(m.dump());
+                }
+                catch (const GameError &e)
+                {
+                    send(json{{"type", "error"}, {"message", e.what()}}.dump());
+                }
+                return;
+            }
+
             if (type == "cancel")
             {
                 if (!msg.contains("order_id"))
@@ -655,6 +772,7 @@ private:
     Database &db_;
     SessionRegistry &registry_;
     EngineQueue &engine_queue_;
+    GameManager &game_;
     std::atomic<uint64_t> &next_order_id_;
     uint16_t default_company_id_;
     int64_t current_user_id_ = -1;
@@ -706,7 +824,7 @@ public:
     static_assert(sizeof(DbTask) == 32, "DbTask must be exactly 32 bytes");
 
     Server(net::io_context &ioc, unsigned short port, MarketState &market)
-        : acceptor_(ioc, tcp::endpoint(tcp::v4(), port)), market_(market), db_("exchange.db")
+        : acceptor_(ioc, tcp::endpoint(tcp::v4(), port)), market_(market), db_("exchange.db"), game_(db_, default_scenario_bank())
     {
 
         for (const auto &company : market_.companies())
@@ -781,7 +899,7 @@ private:
                 {
                     std::make_shared<Session>(
                         std::move(socket), market_, registry_,
-                        next_order_id_, db_, engine_queue_)
+                        next_order_id_, db_, engine_queue_, game_)
                         ->start();
                 }
                 do_accept();
@@ -1007,6 +1125,7 @@ private:
     tcp::acceptor acceptor_;
     MarketState &market_;
     Database db_;
+    GameManager game_;
 
     SessionRegistry registry_;
     TradeHistory history_;
