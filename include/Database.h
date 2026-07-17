@@ -343,7 +343,7 @@ public:
         return rows;
     }
 
-    // Newest-first, capped at `limit` — callers reverse for a chronological
+    // Newest-first, capped at `limit` - callers reverse for a chronological
     // chart. Backs the price chart's seed-on-connect so it survives restarts
     // instead of resetting to empty every time (trades table already logs
     // every fill).

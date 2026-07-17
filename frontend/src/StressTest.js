@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import PerformanceGraphs from "./PerformanceGraphs";
 
 const ORDER_PRESETS = [100, 1000, 10000, 100000];
-const TICK_MS = 50; // 20 ticks/sec — batches orders within a tick to hit the target rate
+const TICK_MS = 50; // 20 ticks/sec - batches orders within a tick to hit the target rate
 const SYNTHETIC_TRADER_COUNT = 50; // spreads fills across many fake user_ids so
 // self-trade prevention doesn't constantly trip against a single real account
 
@@ -194,7 +194,7 @@ export default function StressTest({ send, engineMode, companies, token, connect
         </div>
         <p className="stress-test-note">
           "Client Send Rate" is how fast the browser can dispatch WebSocket messages, not the
-          engine's matching throughput — see live engine metrics below for that.
+          engine's matching throughput - see live engine metrics below for that.
         </p>
       </div>
 
