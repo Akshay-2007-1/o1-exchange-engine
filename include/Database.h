@@ -40,14 +40,17 @@ public:
     Database(const Database&)            = delete;
     Database& operator=(const Database&) = delete;
 
-    void begin_transaction() {
-        std::lock_guard<std::mutex> lock(db_mutex_);
+    // Exposed so callers (e.g. Server.h's db_worker_) can hold the lock across an
+    // entire multi-statement batch, preventing concurrent reads (get_user_profile,
+    // reserve_cash, ...) from observing partially-applied state mid-batch.
+    std::mutex& mutex() { return db_mutex_; }
+
+    void begin_transaction_unlocked() {
         sqlite3_step(stmt_begin_);
         sqlite3_reset(stmt_begin_);
     }
 
-    void commit_transaction() {
-        std::lock_guard<std::mutex> lock(db_mutex_);
+    void commit_transaction_unlocked() {
         sqlite3_step(stmt_commit_);
         sqlite3_reset(stmt_commit_);
     }
@@ -263,15 +266,13 @@ public:
 
     void settle_batch(const std::vector<TradeRecord>& trades) {
         std::lock_guard<std::mutex> lock(db_mutex_);
-        sqlite3_step(stmt_begin_);
-        sqlite3_reset(stmt_begin_);
+        begin_transaction_unlocked();
 
         for (const auto& t : trades) {
             settle_trade_unlocked(t.buyer_id, t.seller_id, t.company_id, t.quantity, t.price, t.buyer_limit_price);
         }
 
-        sqlite3_step(stmt_commit_);
-        sqlite3_reset(stmt_commit_);
+        commit_transaction_unlocked();
     }
 
     struct LeaderboardEntry {
@@ -342,8 +343,7 @@ public:
         return rows;
     }
 
-    void release_cash(int64_t user_id, double amount) {
-        std::lock_guard<std::mutex> lock(db_mutex_);
+    void release_cash_unlocked(int64_t user_id, double amount) {
         sqlite3_clear_bindings(stmt_settle_cash_);
         sqlite3_bind_double(stmt_settle_cash_, 1, amount);
         sqlite3_bind_int64(stmt_settle_cash_, 2, user_id);
@@ -351,14 +351,23 @@ public:
         sqlite3_reset(stmt_settle_cash_);
     }
 
-    void release_shares(int64_t user_id, uint16_t company_id, uint32_t quantity) {
+    void release_cash(int64_t user_id, double amount) {
         std::lock_guard<std::mutex> lock(db_mutex_);
+        release_cash_unlocked(user_id, amount);
+    }
+
+    void release_shares_unlocked(int64_t user_id, uint16_t company_id, uint32_t quantity) {
         sqlite3_clear_bindings(stmt_settle_shares_);
         sqlite3_bind_int64(stmt_settle_shares_, 1, user_id);
         sqlite3_bind_int(stmt_settle_shares_, 2, company_id);
         sqlite3_bind_int64(stmt_settle_shares_, 3, quantity);
         sqlite3_step(stmt_settle_shares_);
         sqlite3_reset(stmt_settle_shares_);
+    }
+
+    void release_shares(int64_t user_id, uint16_t company_id, uint32_t quantity) {
+        std::lock_guard<std::mutex> lock(db_mutex_);
+        release_shares_unlocked(user_id, company_id, quantity);
     }
 
 private:
