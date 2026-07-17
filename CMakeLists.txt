@@ -73,12 +73,16 @@ find_package(SQLite3 REQUIRED)
 target_link_libraries(engine ${BOOST_LINK_LIB} pthread nlohmann_json::nlohmann_json sqlite3 sodium)
 
 # ── Test executable ────────────────────────
-add_executable(tests tests/test_orderbook.cpp)
+add_executable(tests
+    tests/test_orderbook.cpp
+    tests/test_orderbook_legacy_parity.cpp
+    tests/test_database.cpp
+)
 target_include_directories(tests PRIVATE include)
-target_link_libraries(tests GTest::gtest_main)
+target_link_libraries(tests GTest::gtest_main sqlite3 sodium)
 
 enable_testing()
-add_test(NAME OrderBookTests COMMAND tests)
+add_test(NAME EngineTests COMMAND tests)
 
 # ── Benchmark executable ───────────────────
 add_executable(benchmarks benchmark/benchmark_orderbook.cpp)
