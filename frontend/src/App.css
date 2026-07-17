@@ -513,6 +513,27 @@ option {
   padding: 0 14px;
   border-top: 1px solid rgba(43, 49, 58, 0.68);
   font-size: 13px;
+  animation: depth-row-flash-buy 0.6s ease-out;
+}
+
+.depth-row.sell {
+  animation-name: depth-row-flash-sell;
+}
+
+@keyframes depth-row-flash-buy {
+  0% { background: var(--buy-soft); }
+  100% { background: transparent; }
+}
+
+@keyframes depth-row-flash-sell {
+  0% { background: var(--sell-soft); }
+  100% { background: transparent; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .depth-row {
+    animation: none;
+  }
 }
 
 .depth-row span {
@@ -734,6 +755,23 @@ option {
   .my-order-action {
       grid-column: 1 / -1;
       margin-top: 8px;
+  }
+
+  .stress-test-row {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+
+  .stress-test-stats {
+    grid-template-columns: 1fr;
+  }
+
+  .preset-group {
+    justify-content: space-between;
+  }
+
+  .preset-group button {
+    flex: 1;
   }
 }
 

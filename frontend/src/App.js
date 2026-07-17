@@ -269,7 +269,7 @@ function ToastStack({ toasts }) {
       {toasts.map(t => (
         <div key={t.id} style={{
           background: "var(--panel-bg, #1e1e2e)",
-          border: "1px solid var(--buy, #26a69a)",
+          border: `1px solid ${t.kind === "error" ? "var(--sell, #ff6262)" : "var(--buy, #26a69a)"}`,
           color: "var(--text, #cdd6f4)",
           padding: "0.6rem 1rem",
           borderRadius: "6px",
@@ -277,7 +277,7 @@ function ToastStack({ toasts }) {
           boxShadow: "0 2px 12px rgba(0,0,0,0.4)",
           animation: "fadeInUp 0.2s ease"
         }}>
-          ✓ {t.msg}
+          {t.kind === "error" ? "⚠" : "✓"} {t.msg}
         </div>
       ))}
     </div>
@@ -581,6 +581,11 @@ export default function App() {
         if (msg.type === "error") {
           setAuthError(msg.message);
           setLastError(msg.message);
+          // Only ever rendered once the dashboard (with <ToastStack/>) is
+          // mounted; harmless no-op otherwise, so no need to gate on `view`
+          // here (which would be a stale closure — see selectedCompanyIdRef
+          // for why this handler can't read live state directly).
+          showToast(msg.message, "error");
         }
 
         if (msg.type === "registered") {
