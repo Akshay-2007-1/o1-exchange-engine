@@ -10,3 +10,4 @@ CMakeLists.txt
 .claude/settings.local.json
 .DS_Store
 GEMINI.md
+benchmark_results.json
