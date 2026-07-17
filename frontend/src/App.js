@@ -452,6 +452,7 @@ export default function App() {
   const [priceHistory, setPriceHistory] = useState({});
   const [myTrades, setMyTrades] = useState([]);
   const [engineMode, setEngineMode] = useState("CURRENT");
+  const [metrics, setMetrics] = useState([]);
 
   const showToast = (msg, kind = "fill") => {
     const id = Date.now() + Math.random();
@@ -620,6 +621,10 @@ export default function App() {
 
         if (msg.type === "engine_mode") {
           setEngineMode(msg.mode);
+        }
+
+        if (msg.type === "metrics") {
+          setMetrics(prev => [...prev, msg].slice(-120));
         }
 
         if (msg.type === "book") {
@@ -1137,6 +1142,7 @@ export default function App() {
           companies={companies}
           token={user?.token}
           connected={connected}
+          metrics={metrics}
         />
       </div>
       <ToastStack toasts={toasts} />

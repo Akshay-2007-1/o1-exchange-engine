@@ -853,3 +853,48 @@ option {
   font-size: 12px;
   line-height: 1.4;
 }
+
+/* Performance Graphs panel */
+.perf-graphs-panel {
+  margin-top: 16px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.perf-graphs-body {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+}
+
+.perf-speedup-badge {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: var(--buy-soft);
+  color: var(--buy);
+  font-size: 13px;
+}
+
+.perf-chart-block {
+  display: grid;
+  gap: 6px;
+}
+
+.perf-chart-label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.perf-empty {
+  height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  font-size: 12px;
+  border: 1px dashed var(--line);
+  border-radius: 6px;
+}
