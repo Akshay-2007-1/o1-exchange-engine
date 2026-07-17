@@ -855,40 +855,46 @@ private:
             {
                 std::set<int64_t> affected_users;
 
-                db_.begin_transaction();
-
-                for (const auto &task : db_queue_back_)
                 {
-                    if (task.type == DB_SETTLE)
-                    {
-                        db_.settle_trade_unlocked(
-                            task.buyer_id,
-                            task.seller_id,
-                            task.company_id,
-                            task.quantity,
-                            task.price,
-                            task.buyer_limit_price);
-                        affected_users.insert(task.buyer_id);
-                        affected_users.insert(task.seller_id);
-                    }
-                    else if (task.type == DB_REFUND_CASH)
-                    {
-                        double amount = (static_cast<double>(task.price) / 100.0) * task.quantity;
-                        db_.release_cash(task.buyer_id, amount);
-                        affected_users.insert(task.buyer_id);
-                    }
-                    else if (task.type == DB_REFUND_SHARES)
-                    {
-                        db_.release_shares(task.buyer_id, task.company_id, task.quantity);
-                        affected_users.insert(task.buyer_id);
-                    }
-                    else if (task.type == DB_LOG_TRADE)
-                    {
-                        db_.log_trade_unlocked(task.company_id, task.buyer_id, task.seller_id, task.price, task.quantity);
-                    }
-                }
+                    // Hold db_.mutex() for the whole batch so concurrent reads
+                    // (get_user_profile, reserve_cash, ...) on the same connection
+                    // can never observe a partially-applied batch (see issue #8).
+                    std::lock_guard<std::mutex> db_lock(db_.mutex());
+                    db_.begin_transaction_unlocked();
 
-                db_.commit_transaction();
+                    for (const auto &task : db_queue_back_)
+                    {
+                        if (task.type == DB_SETTLE)
+                        {
+                            db_.settle_trade_unlocked(
+                                task.buyer_id,
+                                task.seller_id,
+                                task.company_id,
+                                task.quantity,
+                                task.price,
+                                task.buyer_limit_price);
+                            affected_users.insert(task.buyer_id);
+                            affected_users.insert(task.seller_id);
+                        }
+                        else if (task.type == DB_REFUND_CASH)
+                        {
+                            double amount = (static_cast<double>(task.price) / 100.0) * task.quantity;
+                            db_.release_cash_unlocked(task.buyer_id, amount);
+                            affected_users.insert(task.buyer_id);
+                        }
+                        else if (task.type == DB_REFUND_SHARES)
+                        {
+                            db_.release_shares_unlocked(task.buyer_id, task.company_id, task.quantity);
+                            affected_users.insert(task.buyer_id);
+                        }
+                        else if (task.type == DB_LOG_TRADE)
+                        {
+                            db_.log_trade_unlocked(task.company_id, task.buyer_id, task.seller_id, task.price, task.quantity);
+                        }
+                    }
+
+                    db_.commit_transaction_unlocked();
+                }
 
                 for (int64_t uid : affected_users)
                 {
