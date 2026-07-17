@@ -343,6 +343,23 @@ public:
         return rows;
     }
 
+    // Newest-first, capped at `limit` — callers reverse for a chronological
+    // chart. Backs the price chart's seed-on-connect so it survives restarts
+    // instead of resetting to empty every time (trades table already logs
+    // every fill).
+    std::vector<uint32_t> get_recent_prices(uint16_t company_id, int limit = 60) {
+        std::vector<uint32_t> prices;
+        std::lock_guard<std::mutex> lock(db_mutex_);
+        sqlite3_clear_bindings(stmt_get_recent_prices_);
+        sqlite3_bind_int(stmt_get_recent_prices_, 1, company_id);
+        sqlite3_bind_int(stmt_get_recent_prices_, 2, limit);
+        while (sqlite3_step(stmt_get_recent_prices_) == SQLITE_ROW) {
+            prices.push_back(static_cast<uint32_t>(sqlite3_column_int(stmt_get_recent_prices_, 0)));
+        }
+        sqlite3_reset(stmt_get_recent_prices_);
+        return prices;
+    }
+
     void release_cash_unlocked(int64_t user_id, double amount) {
         sqlite3_clear_bindings(stmt_settle_cash_);
         sqlite3_bind_double(stmt_settle_cash_, 1, amount);
@@ -392,6 +409,7 @@ private:
     sqlite3_stmt* stmt_leaderboard_ = nullptr;
     sqlite3_stmt* stmt_log_trade_ = nullptr;
     sqlite3_stmt* stmt_get_user_trades_ = nullptr;
+    sqlite3_stmt* stmt_get_recent_prices_ = nullptr;
 
     void initialise() {
         // High-performance SQLite pragmas
@@ -474,6 +492,7 @@ private:
             -1, &stmt_leaderboard_, nullptr);
         sqlite3_prepare_v2(db_, "INSERT INTO trades (company_id, buyer_id, seller_id, price, quantity, ts) VALUES (?,?,?,?,?,?);", -1, &stmt_log_trade_, nullptr);
         sqlite3_prepare_v2(db_, "SELECT company_id, buyer_id, seller_id, price, quantity, ts FROM trades WHERE buyer_id = ? OR seller_id = ? ORDER BY ts DESC, id DESC LIMIT ?;", -1, &stmt_get_user_trades_, nullptr);
+        sqlite3_prepare_v2(db_, "SELECT price FROM trades WHERE company_id = ? ORDER BY ts DESC, id DESC LIMIT ?;", -1, &stmt_get_recent_prices_, nullptr);
     }
 
     void finalize_statements() {
@@ -494,6 +513,7 @@ private:
         sqlite3_finalize(stmt_leaderboard_);
         sqlite3_finalize(stmt_log_trade_);
         sqlite3_finalize(stmt_get_user_trades_);
+        sqlite3_finalize(stmt_get_recent_prices_);
     }
 
     std::string generate_token() {
