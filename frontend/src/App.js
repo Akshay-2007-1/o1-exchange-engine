@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
 import StressTest from "./StressTest";
+import MarketMakingGame from "./MarketMakingGame";
 
 // const WS_URL = process.env.REACT_APP_WS_URL || "ws://20.205.25.160:9001";
 const WS_URL = "ws://127.0.0.1:9001";
@@ -453,6 +454,7 @@ export default function App() {
   const [myTrades, setMyTrades] = useState([]);
   const [engineMode, setEngineMode] = useState("CURRENT");
   const [metrics, setMetrics] = useState([]);
+  const [gameState, setGameState] = useState(null);
 
   const showToast = (msg, kind = "fill") => {
     const id = Date.now() + Math.random();
@@ -630,6 +632,54 @@ export default function App() {
 
         if (msg.type === "metrics") {
           setMetrics(prev => [...prev, msg].slice(-120));
+        }
+
+        if (msg.type === "game_started") {
+          setGameState({
+            sessionId: msg.session_id,
+            scenario: msg.scenario,
+            currentRound: msg.current_round,
+            maxRounds: msg.max_rounds,
+            position: msg.position,
+            cash: msg.cash,
+            hintsRevealed: msg.hints_revealed || [],
+            status: msg.status,
+            roundHistory: msg.round_history || [],
+            lastRoundResult: null,
+            reveal: null
+          });
+        }
+
+        if (msg.type === "game_round_result") {
+          setGameState(prev => {
+            if (!prev || prev.sessionId !== msg.session_id) return prev;
+            return {
+              ...prev,
+              currentRound: msg.round_number,
+              position: msg.position,
+              cash: msg.cash,
+              status: msg.status,
+              lastRoundResult: msg,
+              roundHistory: [
+                ...prev.roundHistory,
+                { round_number: msg.round_number, bid: msg.quote.bid, ask: msg.quote.ask, verdict: msg.verdict, fill_price: msg.fill_price }
+              ]
+            };
+          });
+        }
+
+        if (msg.type === "game_hint_revealed") {
+          setGameState(prev => {
+            if (!prev || prev.sessionId !== msg.session_id) return prev;
+            return { ...prev, cash: msg.cash, hintsRevealed: [...prev.hintsRevealed, msg.hint_text] };
+          });
+        }
+
+        if (msg.type === "game_ended") {
+          setGameState(prev => {
+            if (!prev || prev.sessionId !== msg.session_id) return prev;
+            return { ...prev, status: "ended", reveal: msg };
+          });
         }
 
         if (msg.type === "book") {
@@ -1140,6 +1190,12 @@ export default function App() {
         
         <MyOrdersPanel orders={myOpenOrders} onCancel={cancelOrder} companies={companies} />
         <MyTradesPanel trades={myTrades} userId={user?.userId} companies={companies} />
+        <MarketMakingGame
+          send={sendRaw}
+          token={user?.token}
+          connected={connected}
+          gameState={gameState}
+        />
         <StressTest
           send={sendRaw}
           engineMode={engineMode}
