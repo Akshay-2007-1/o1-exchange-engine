@@ -42,13 +42,17 @@ function RoundHistoryTable({ rounds }) {
 export default function MarketMakingGame({ send, token, connected, gameState }) {
   const [bid, setBid] = useState("");
   const [ask, setAsk] = useState("");
-  const [category, setCategory] = useState("");
 
   const canPlay = connected && !!token;
 
+  // No category picker: every stub scenario is tagged "estimation" right
+  // now, so filtering by category has nothing to filter and previously just
+  // dead-ended on any other input ("No scenarios available for category
+  // '...'"). Bring this back once there's more than one category to choose
+  // from.
   const startGame = (forceNew = false) => {
     if (!canPlay) return;
-    send({ type: "game_start", token, category: category || undefined, force_new: forceNew });
+    send({ type: "game_start", token, force_new: forceNew });
   };
 
   const submitQuote = event => {
@@ -85,16 +89,6 @@ export default function MarketMakingGame({ send, token, connected, gameState }) 
       <div className="game-body">
         {!gameState && (
           <div className="game-start-row">
-            <label className="stress-test-label" htmlFor="game-category">
-              Category (optional)
-              <input
-                id="game-category"
-                type="text"
-                placeholder="e.g. estimation"
-                value={category}
-                onChange={e => setCategory(e.target.value)}
-              />
-            </label>
             <button
               type="button"
               className="submit-order buy"
