@@ -286,7 +286,7 @@ make
 
 ```bash
 docker build -t exchange-engine .
-docker run -d -p 9001:9001 exchange-engine
+docker run -d -p 9001:9001 -v exchange-data:/app/data exchange-engine
 ```
 
 ---
@@ -346,10 +346,10 @@ git pull origin main
 sudo docker build -t exchange-engine .
 sudo docker stop $(sudo docker ps -q)
 sudo docker rm $(sudo docker ps -aq)
-sudo docker run -d --restart=always -p 9001:9001 exchange-engine
+sudo docker run -d --restart=always -p 9001:9001 -v exchange-data:/app/data exchange-engine
 ```
 
-Engine accessible at `ws://20.205.25.160:9001`.
+Engine accessible at `ws://20.205.25.160:9001`. The `-v exchange-data:/app/data` mount is what lets the SQLite database (accounts, balances, trade history) survive a redeploy instead of resetting on every `docker rm`.
 
 ---
 

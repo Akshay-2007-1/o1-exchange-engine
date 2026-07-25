@@ -37,7 +37,7 @@ npm run build
 **Docker:**
 ```bash
 docker build -t exchange-engine .
-docker run -d -p 9001:9001 exchange-engine
+docker run -d -p 9001:9001 -v exchange-data:/app/data exchange-engine
 ```
 
 ## Architecture
@@ -94,5 +94,6 @@ Azure VM (`ws://20.205.25.160:9001`). Re-deploy:
 git pull origin main
 sudo docker build -t exchange-engine .
 sudo docker stop $(sudo docker ps -q) && sudo docker rm $(sudo docker ps -aq)
-sudo docker run -d --restart=always -p 9001:9001 exchange-engine
+sudo docker run -d --restart=always -p 9001:9001 -v exchange-data:/app/data exchange-engine
 ```
+The named volume (`exchange-data`, mounted at `/app/data`, where the engine opens `exchange.db`) is what makes the database survive this stop/rm/run cycle - a plain `docker run` without `-v exchange-data:/app/data` starts from an empty database.
