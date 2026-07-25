@@ -18,7 +18,7 @@ struct Order
     uint32_t quantity;   // 4 bytes
     uint16_t company_id; // 2 bytes
     bool side;           // 1 byte (true for BUY, false for SELL)
-    uint8_t padding[5];  // 5 bytes padding -> Total 40 bytes
+    uint8_t padding[5] = {};  // 5 bytes padding -> Total 40 bytes
 };
 #pragma pack(pop)
 
@@ -33,7 +33,7 @@ struct Trade
     uint32_t quantity;          // 4 bytes
     uint32_t buyer_limit_price; // 4 bytes
     uint16_t company_id;        // 2 bytes
-    uint8_t padding[2];         // 2 bytes padding -> Total 48 bytes
+    uint8_t padding[2] = {};         // 2 bytes padding -> Total 48 bytes
 };
 #pragma pack(pop)
 
@@ -57,7 +57,7 @@ public:
         uint32_t price;
         uint32_t quantity;
         uint32_t orders;
-        uint8_t padding[4];
+        uint8_t padding[4] = {};
     };
 #pragma pack(pop)
 

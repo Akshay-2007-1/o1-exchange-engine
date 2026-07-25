@@ -239,8 +239,8 @@ class Session : public std::enable_shared_from_this<Session>
 {
 public:
     Session(tcp::socket socket, MarketState &market, SessionRegistry &registry,
-            std::atomic<uint64_t> &next_order_id, Database &db, EngineQueue &engine_queue, GameManager &game)
-        : ws_(std::move(socket)), market_(market), registry_(registry), next_order_id_(next_order_id), default_company_id_(market.default_company_id()), db_(db), engine_queue_(engine_queue), game_(game) {}
+            Database &db, EngineQueue &engine_queue, GameManager &game)
+        : ws_(std::move(socket)), market_(market), db_(db), registry_(registry), engine_queue_(engine_queue), game_(game), default_company_id_(market.default_company_id()) {}
 
     void start()
     {
@@ -271,6 +271,23 @@ public:
     }
 
 private:
+    void enqueue_order_task(uint16_t company_id, int64_t user_id, bool side,
+                             uint32_t price, uint32_t quantity, uint64_t timestamp)
+    {
+        EngineTask task;
+        task.type = EngineTask::ORDER;
+        task.company_id = company_id;
+        task.order.user_id = user_id;
+        task.order.company_id = company_id;
+        task.order.side = side;
+        task.order.price = price;
+        task.order.quantity = quantity;
+        task.order.timestamp = timestamp;
+        task.session = shared_from_this();
+        while (!engine_queue_.push(task))
+            std::this_thread::yield();
+    }
+
     void do_read()
     {
         ws_.async_read(buffer_, [self = shared_from_this()](beast::error_code ec, std::size_t bytes_transferred)
@@ -335,8 +352,9 @@ private:
             return;
         }
         current_user_id_ = result.id;
+        // Starter portfolio: 100 shares of every listed company, free, on signup.
         for (const auto &company : market_.companies())
-            db_.release_shares(result.id, company.id, 100);
+            db_.grant_shares(result.id, company.id, 100);
         send(json{{"type", "registered"}, {"user_id", result.id}, {"username", username}, {"message", "Account created successfully"}}.dump());
         send_user_update();
     }
@@ -633,24 +651,14 @@ private:
                         send(json{{"type", "error"}, {"message", "No asks in book - market buy cannot execute."}}.dump());
                         return;
                     }
-                    double required_cash = (static_cast<double>(ref_price) / 100.0) * quantity;
-                    auto check = db_.reserve_cash(user_id, required_cash);
+                    int64_t required_cash_cents = static_cast<int64_t>(ref_price) * quantity;
+                    auto check = db_.reserve_cash(user_id, required_cash_cents);
                     if (!check.ok)
                     {
                         send(json{{"type", "error"}, {"message", check.error}}.dump());
                         return;
                     }
-                    EngineTask task;
-                    task.type = EngineTask::ORDER;
-                    task.company_id = company_id;
-                    task.order.user_id = user_id;
-                    task.order.company_id = company_id;
-                    task.order.side = true;
-                    task.order.price = ref_price;
-                    task.order.quantity = quantity;
-                    task.order.timestamp = timestamp;
-                    task.session = shared_from_this();
-                    while (!engine_queue_.push(task)) std::this_thread::yield();
+                    enqueue_order_task(company_id, user_id, true, ref_price, quantity, timestamp);
                 }
                 else
                 {
@@ -666,17 +674,7 @@ private:
                         send(json{{"type", "error"}, {"message", check.error}}.dump());
                         return;
                     }
-                    EngineTask task;
-                    task.type = EngineTask::ORDER;
-                    task.company_id = company_id;
-                    task.order.user_id = user_id;
-                    task.order.company_id = company_id;
-                    task.order.side = false;
-                    task.order.price = ref_price;
-                    task.order.quantity = quantity;
-                    task.order.timestamp = timestamp;
-                    task.session = shared_from_this();
-                    while (!engine_queue_.push(task)) std::this_thread::yield();
+                    enqueue_order_task(company_id, user_id, false, ref_price, quantity, timestamp);
                 }
                 return;
             }
@@ -725,8 +723,8 @@ private:
                 }
                 else if (side)
                 {
-                    double required_cash = (static_cast<double>(price) / 100.0) * quantity;
-                    auto check = db_.reserve_cash(user_id, required_cash);
+                    int64_t required_cash_cents = static_cast<int64_t>(price) * quantity;
+                    auto check = db_.reserve_cash(user_id, required_cash_cents);
                     if (!check.ok)
                     {
                         send(json{{"type", "error"}, {"message", check.error}}.dump());
@@ -743,19 +741,7 @@ private:
                     }
                 }
 
-                EngineTask task;
-                task.type = EngineTask::ORDER;
-                task.company_id = company_id;
-                task.order.user_id = user_id;
-                task.order.company_id = company_id;
-                task.order.side = side;
-                task.order.price = price;
-                task.order.quantity = quantity;
-                task.order.timestamp = timestamp;
-                task.session = shared_from_this();
-
-                while (!engine_queue_.push(task))
-                    std::this_thread::yield();
+                enqueue_order_task(company_id, user_id, side, price, quantity, timestamp);
             }
         }
         catch (const std::exception &e)
@@ -773,7 +759,6 @@ private:
     SessionRegistry &registry_;
     EngineQueue &engine_queue_;
     GameManager &game_;
-    std::atomic<uint64_t> &next_order_id_;
     uint16_t default_company_id_;
     int64_t current_user_id_ = -1;
 };
@@ -824,7 +809,7 @@ public:
     static_assert(sizeof(DbTask) == 32, "DbTask must be exactly 32 bytes");
 
     Server(net::io_context &ioc, unsigned short port, MarketState &market)
-        : acceptor_(ioc, tcp::endpoint(tcp::v4(), port)), market_(market), db_("exchange.db"), game_(db_, default_scenario_bank())
+        : acceptor_(ioc, tcp::endpoint(tcp::v4(), port)), market_(market), db_("data/exchange.db"), game_(db_, default_scenario_bank())
     {
 
         for (const auto &company : market_.companies())
@@ -899,7 +884,7 @@ private:
                 {
                     std::make_shared<Session>(
                         std::move(socket), market_, registry_,
-                        next_order_id_, db_, engine_queue_, game_)
+                        db_, engine_queue_, game_)
                         ->start();
                 }
                 do_accept();
@@ -1074,7 +1059,7 @@ private:
                 {
                     // Hold db_.mutex() for the whole batch so concurrent reads
                     // (get_user_profile, reserve_cash, ...) on the same connection
-                    // can never observe a partially-applied batch (see issue #8).
+                    // can never observe a partially-applied batch (see issue #14).
                     std::lock_guard<std::mutex> db_lock(db_.mutex());
                     db_.begin_transaction_unlocked();
 
@@ -1094,8 +1079,8 @@ private:
                         }
                         else if (task.type == DB_REFUND_CASH)
                         {
-                            double amount = (static_cast<double>(task.price) / 100.0) * task.quantity;
-                            db_.release_cash_unlocked(task.buyer_id, amount);
+                            int64_t amount_cents = static_cast<int64_t>(task.price) * task.quantity;
+                            db_.release_cash_unlocked(task.buyer_id, amount_cents);
                             affected_users.insert(task.buyer_id);
                         }
                         else if (task.type == DB_REFUND_SHARES)
@@ -1130,7 +1115,6 @@ private:
     SessionRegistry registry_;
     TradeHistory history_;
     EngineQueue engine_queue_;
-    std::atomic<uint64_t> next_order_id_{1};
 
     std::vector<DbTask> db_queue_front_;
     std::vector<DbTask> db_queue_back_;

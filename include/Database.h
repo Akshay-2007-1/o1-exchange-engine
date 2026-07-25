@@ -141,24 +141,24 @@ public:
         return {true, "", user_id};
     }
 
-    Result reserve_cash(int64_t user_id, double amount) {
+    Result reserve_cash(int64_t user_id, int64_t amount_cents) {
         std::lock_guard<std::mutex> lock(db_mutex_);
 
         sqlite3_clear_bindings(stmt_get_bal_);
         sqlite3_bind_int64(stmt_get_bal_, 1, user_id);
-        
-        double current = 0.0;
+
+        int64_t current = 0;
         if (sqlite3_step(stmt_get_bal_) == SQLITE_ROW) {
-            current = sqlite3_column_double(stmt_get_bal_, 0);
+            current = sqlite3_column_int64(stmt_get_bal_, 0);
         }
         sqlite3_reset(stmt_get_bal_);
 
-        if (current < amount) {
+        if (current < amount_cents) {
             return {false, "Insufficient funds."};
         }
 
         sqlite3_clear_bindings(stmt_res_cash_);
-        sqlite3_bind_double(stmt_res_cash_, 1, amount);
+        sqlite3_bind_int64(stmt_res_cash_, 1, amount_cents);
         sqlite3_bind_int64(stmt_res_cash_, 2, user_id);
         sqlite3_step(stmt_res_cash_);
         sqlite3_reset(stmt_res_cash_);
@@ -194,19 +194,19 @@ public:
     }
 
     struct UserProfile {
-        double cash;
+        int64_t cash; // cents
         std::vector<std::pair<uint16_t, uint32_t>> portfolio;
     };
 
     UserProfile get_user_profile(int64_t user_id) {
-        UserProfile profile = {0.0, {}};
+        UserProfile profile = {0, {}};
         std::lock_guard<std::mutex> lock(db_mutex_);
 
         // Get Cash
         sqlite3_clear_bindings(stmt_get_bal_);
         sqlite3_bind_int64(stmt_get_bal_, 1, user_id);
         if (sqlite3_step(stmt_get_bal_) == SQLITE_ROW) {
-            profile.cash = sqlite3_column_double(stmt_get_bal_, 0);
+            profile.cash = sqlite3_column_int64(stmt_get_bal_, 0);
         }
         sqlite3_reset(stmt_get_bal_);
 
@@ -233,7 +233,9 @@ public:
     };
 
     void settle_trade_unlocked(int64_t buyer_id, int64_t seller_id, uint16_t company_id, uint32_t quantity, uint32_t price, uint32_t buyer_limit_price) {
-        double total = (static_cast<double>(price) / 100.0) * quantity;
+        // price is already cents/share, so price * quantity is cents directly -
+        // no dollar round-trip, and no floating-point rounding to worry about.
+        int64_t total_cents = static_cast<int64_t>(price) * quantity;
 
         // Credit shares to buyer
         sqlite3_clear_bindings(stmt_settle_shares_);
@@ -245,16 +247,16 @@ public:
 
         // Credit cash to seller
         sqlite3_clear_bindings(stmt_settle_cash_);
-        sqlite3_bind_double(stmt_settle_cash_, 1, total);
+        sqlite3_bind_int64(stmt_settle_cash_, 1, total_cents);
         sqlite3_bind_int64(stmt_settle_cash_, 2, seller_id);
         sqlite3_step(stmt_settle_cash_);
         sqlite3_reset(stmt_settle_cash_);
 
         // Price improvement cash refund for buyer
         if (buyer_limit_price > price) {
-            double refund = (static_cast<double>(buyer_limit_price - price) / 100.0) * quantity;
+            int64_t refund_cents = static_cast<int64_t>(buyer_limit_price - price) * quantity;
             sqlite3_clear_bindings(stmt_settle_cash_);
-            sqlite3_bind_double(stmt_settle_cash_, 1, refund);
+            sqlite3_bind_int64(stmt_settle_cash_, 1, refund_cents);
             sqlite3_bind_int64(stmt_settle_cash_, 2, buyer_id);
             sqlite3_step(stmt_settle_cash_);
             sqlite3_reset(stmt_settle_cash_);
@@ -280,7 +282,7 @@ public:
     struct LeaderboardEntry {
         int64_t     user_id;
         std::string username;
-        double      cash;
+        int64_t     cash; // cents
         int64_t     total_shares;
     };
 
@@ -294,7 +296,7 @@ public:
             e.user_id     = sqlite3_column_int64(stmt_leaderboard_, 0);
             const char* name = reinterpret_cast<const char*>(sqlite3_column_text(stmt_leaderboard_, 1));
             e.username    = name ? name : "";
-            e.cash        = sqlite3_column_double(stmt_leaderboard_, 2);
+            e.cash        = sqlite3_column_int64(stmt_leaderboard_, 2);
             e.total_shares = sqlite3_column_int64(stmt_leaderboard_, 3);
             rows.push_back(e);
         }
@@ -362,17 +364,17 @@ public:
         return prices;
     }
 
-    void release_cash_unlocked(int64_t user_id, double amount) {
+    void release_cash_unlocked(int64_t user_id, int64_t amount_cents) {
         sqlite3_clear_bindings(stmt_settle_cash_);
-        sqlite3_bind_double(stmt_settle_cash_, 1, amount);
+        sqlite3_bind_int64(stmt_settle_cash_, 1, amount_cents);
         sqlite3_bind_int64(stmt_settle_cash_, 2, user_id);
         sqlite3_step(stmt_settle_cash_);
         sqlite3_reset(stmt_settle_cash_);
     }
 
-    void release_cash(int64_t user_id, double amount) {
+    void release_cash(int64_t user_id, int64_t amount_cents) {
         std::lock_guard<std::mutex> lock(db_mutex_);
-        release_cash_unlocked(user_id, amount);
+        release_cash_unlocked(user_id, amount_cents);
     }
 
     void release_shares_unlocked(int64_t user_id, uint16_t company_id, uint32_t quantity) {
@@ -387,6 +389,13 @@ public:
     void release_shares(int64_t user_id, uint16_t company_id, uint32_t quantity) {
         std::lock_guard<std::mutex> lock(db_mutex_);
         release_shares_unlocked(user_id, company_id, quantity);
+    }
+
+    // Credits a starting/bonus portfolio (e.g. on registration). Same
+    // underlying credit as release_shares - named separately so call sites
+    // that aren't refunding a reservation read correctly.
+    void grant_shares(int64_t user_id, uint16_t company_id, uint32_t quantity) {
+        release_shares(user_id, company_id, quantity);
     }
 
     // ---- Game Mode (Market Making Practice) ----
@@ -591,7 +600,7 @@ private:
 
             CREATE TABLE IF NOT EXISTS balances (
                 user_id   INTEGER PRIMARY KEY,
-                cash      REAL NOT NULL DEFAULT 10000.0,
+                cash      INTEGER NOT NULL DEFAULT 1000000,
                 FOREIGN KEY (user_id) REFERENCES users(id)
             );
 
@@ -663,7 +672,7 @@ private:
         sqlite3_prepare_v2(db_, "BEGIN TRANSACTION;", -1, &stmt_begin_, nullptr);
         sqlite3_prepare_v2(db_, "COMMIT;", -1, &stmt_commit_, nullptr);
         sqlite3_prepare_v2(db_, "INSERT INTO users (username, password_hash, role, created_at) VALUES (?, ?, ?, ?);", -1, &stmt_create_user_, nullptr);
-        sqlite3_prepare_v2(db_, "INSERT INTO balances (user_id, cash) VALUES (?, 10000.0);", -1, &stmt_init_bal_, nullptr);
+        sqlite3_prepare_v2(db_, "INSERT INTO balances (user_id, cash) VALUES (?, 1000000);", -1, &stmt_init_bal_, nullptr);
         sqlite3_prepare_v2(db_, "SELECT id, password_hash FROM users WHERE username = ?;", -1, &stmt_login_, nullptr);
         sqlite3_prepare_v2(db_, "INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?);", -1, &stmt_create_sess_, nullptr);
         sqlite3_prepare_v2(db_, "SELECT user_id FROM sessions WHERE token = ? AND expires_at > ?;", -1, &stmt_val_sess_, nullptr);
