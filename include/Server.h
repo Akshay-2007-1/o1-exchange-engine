@@ -706,7 +706,7 @@ public:
     static_assert(sizeof(DbTask) == 32, "DbTask must be exactly 32 bytes");
 
     Server(net::io_context &ioc, unsigned short port, MarketState &market)
-        : acceptor_(ioc, tcp::endpoint(tcp::v4(), port)), market_(market), db_("exchange.db")
+        : acceptor_(ioc, tcp::endpoint(tcp::v4(), port)), market_(market), db_("data/exchange.db")
     {
 
         for (const auto &company : market_.companies())
