@@ -79,11 +79,9 @@ Three layers communicate one-way: React frontend → WebSocket server → matchi
 | `shrey`  | `pass123` | $10,000       | 500 APL   |
 | `akshay` | `pass123` | $10,000       | None      |
 
-## Orbital Docs
+## Further Reading
 
-- `MS1_Project_Log.md` - Milestone 1 project log (NUS Orbital submission). Separate tables for Akshay (76h) and Shrey (76.5h) covering Apr 28 – Jun 1. Includes all coding, research/learning, poster, and video work. Format matches the NUS Orbital log sheet (Task / Date Range / Time Taken). Copy into a GDoc for submission.
-- `MS2_Project_Log.md` - Milestone 2 project log, same format, covering Jun 1 – Jun 28 (market orders, trade history, price chart, leaderboard, fill notifications).
-- `milestone1.md` - Milestone 1 ideation document: problem motivation, user stories, full technical design, architecture diagrams, and feature spec.
+- `ARCHITECTURE.md` - Full narrative walkthrough of the matching engine, the dual-engine (CURRENT/LEGACY) comparison, the WebSocket protocol, the concurrency model, and a traced order lifecycle. Complements the condensed reference above.
 
 ## Commit Messages
 
