@@ -1,3 +1,5 @@
+// Manual WS smoke test against a locally running engine (login -> snapshot -> order -> cancel).
+// Run from frontend/: node scripts/test_ws.js
 const WebSocket = require('ws');
 
 const ws = new WebSocket('ws://localhost:9001');

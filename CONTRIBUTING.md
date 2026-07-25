@@ -85,6 +85,10 @@ Three layers communicate one-way: React frontend → WebSocket server → matchi
 - `MS2_Project_Log.md` - Milestone 2 project log, same format, covering Jun 1 – Jun 28 (market orders, trade history, price chart, leaderboard, fill notifications).
 - `milestone1.md` - Milestone 1 ideation document: problem motivation, user stories, full technical design, architecture diagrams, and feature spec.
 
+## Commit Messages
+
+Match the existing `type(scope): summary` convention used throughout the history. Keep the subject line focused on the change itself.
+
 ## Deployment
 
 Azure VM (`ws://20.205.25.160:9001`). Re-deploy:
