@@ -128,7 +128,7 @@ private:
         {
             if (depth.size() >= limit)
                 break;
-            depth.push_back({price, level.total_quantity, static_cast<uint32_t>(level.orders.size())});
+            depth.push_back({price, level.total_quantity, static_cast<uint32_t>(level.orders.size()), {0}});
         }
         return depth;
     }

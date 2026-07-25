@@ -387,6 +387,13 @@ public:
         release_shares_unlocked(user_id, company_id, quantity);
     }
 
+    // Credits a starting/bonus portfolio (e.g. on registration). Same
+    // underlying credit as release_shares - named separately so call sites
+    // that aren't refunding a reservation read correctly.
+    void grant_shares(int64_t user_id, uint16_t company_id, uint32_t quantity) {
+        release_shares(user_id, company_id, quantity);
+    }
+
 private:
     sqlite3* db_ = nullptr;
     std::mutex db_mutex_;
