@@ -611,7 +611,7 @@ export default function App() {
         }
 
         if (msg.type === "user_update") {
-          setCash(msg.cash);
+          setCash(msg.cash / 100);
           setPortfolio(msg.portfolio || []);
           const token = userRef.current?.token;
           if (token && socket.readyState === WebSocket.OPEN) {
@@ -660,7 +660,7 @@ export default function App() {
         }
 
         if (msg.type === "leaderboard") {
-          setLeaderboard(msg.entries || []);
+          setLeaderboard((msg.entries || []).map(e => ({ ...e, cash: e.cash / 100 })));
         }
       } catch (error) {
         setLastError("Received an invalid exchange message.");
