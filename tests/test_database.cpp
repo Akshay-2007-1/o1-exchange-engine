@@ -49,7 +49,7 @@ TEST_F(DatabaseTest, NewUserStartsWithDefaultCashAndNoShares)
     ASSERT_TRUE(user.ok);
 
     auto profile = db.get_user_profile(user.id);
-    EXPECT_DOUBLE_EQ(profile.cash, 10000.0);
+    EXPECT_EQ(profile.cash, 1000000); // $10,000.00 in cents
     EXPECT_TRUE(profile.portfolio.empty());
 }
 
@@ -59,13 +59,13 @@ TEST_F(DatabaseTest, ReserveCashRejectsInsufficientFunds)
     auto user = db.create_user("carol", "pw");
     ASSERT_TRUE(user.ok);
 
-    auto over = db.reserve_cash(user.id, 20000.0);
+    auto over = db.reserve_cash(user.id, 2000000);
     EXPECT_FALSE(over.ok);
-    EXPECT_DOUBLE_EQ(db.get_user_profile(user.id).cash, 10000.0); // unchanged
+    EXPECT_EQ(db.get_user_profile(user.id).cash, 1000000); // unchanged
 
-    auto ok = db.reserve_cash(user.id, 5000.0);
+    auto ok = db.reserve_cash(user.id, 500000);
     EXPECT_TRUE(ok.ok);
-    EXPECT_DOUBLE_EQ(db.get_user_profile(user.id).cash, 5000.0);
+    EXPECT_EQ(db.get_user_profile(user.id).cash, 500000);
 }
 
 TEST_F(DatabaseTest, ReserveSharesRejectsWhenUserHoldsNone)
@@ -86,12 +86,12 @@ TEST_F(DatabaseTest, ReleaseCashRefundsExactAmountReserved)
     auto user = db.create_user("erin", "pw");
     ASSERT_TRUE(user.ok);
 
-    auto reserve = db.reserve_cash(user.id, 3000.0);
+    auto reserve = db.reserve_cash(user.id, 300000);
     ASSERT_TRUE(reserve.ok);
-    EXPECT_DOUBLE_EQ(db.get_user_profile(user.id).cash, 7000.0);
+    EXPECT_EQ(db.get_user_profile(user.id).cash, 700000);
 
-    db.release_cash(user.id, 3000.0);
-    EXPECT_DOUBLE_EQ(db.get_user_profile(user.id).cash, 10000.0);
+    db.release_cash(user.id, 300000);
+    EXPECT_EQ(db.get_user_profile(user.id).cash, 1000000);
 }
 
 TEST_F(DatabaseTest, ReleaseSharesRefundsExactQuantityReserved)
@@ -131,7 +131,7 @@ TEST_F(DatabaseTest, SettleTradeCreditsBuyerSharesAndSellerCash)
     EXPECT_EQ(buyer_profile.portfolio[0].second, 50u);
 
     auto seller_profile = db.get_user_profile(seller.id);
-    EXPECT_DOUBLE_EQ(seller_profile.cash, 10000.0 + 5000.0); // 50 * $100
+    EXPECT_EQ(seller_profile.cash, 1000000 + 500000); // 50 shares * 10000 cents/share
 }
 
 TEST_F(DatabaseTest, SettleTradeRefundsBuyerOnPriceImprovement)
@@ -147,7 +147,7 @@ TEST_F(DatabaseTest, SettleTradeRefundsBuyerOnPriceImprovement)
     db.settle_trade(buyer.id, seller.id, 1, /*quantity=*/20, /*price=*/10000, /*buyer_limit_price=*/11000);
 
     auto buyer_profile = db.get_user_profile(buyer.id);
-    EXPECT_DOUBLE_EQ(buyer_profile.cash, 10000.0 + 200.0); // 20 shares * $10 improvement
+    EXPECT_EQ(buyer_profile.cash, 1000000 + 20000); // 20 shares * 1000 cents/share improvement
 }
 
 TEST_F(DatabaseTest, LeaderboardOrdersByCashDescending)
@@ -158,8 +158,8 @@ TEST_F(DatabaseTest, LeaderboardOrdersByCashDescending)
     auto mid = db.create_user("mid", "pw");
     ASSERT_TRUE(rich.ok && poor.ok && mid.ok);
 
-    db.reserve_cash(poor.id, 9000.0);  // poor: $1,000
-    db.reserve_cash(mid.id, 4000.0);   // mid: $6,000
+    db.reserve_cash(poor.id, 900000);  // poor: $1,000 left
+    db.reserve_cash(mid.id, 400000);   // mid: $6,000 left
     // rich stays at $10,000
 
     auto board = db.get_leaderboard(10);

@@ -534,8 +534,8 @@ private:
                         send(json{{"type", "error"}, {"message", "No asks in book - market buy cannot execute."}}.dump());
                         return;
                     }
-                    double required_cash = (static_cast<double>(ref_price) / 100.0) * quantity;
-                    auto check = db_.reserve_cash(user_id, required_cash);
+                    int64_t required_cash_cents = static_cast<int64_t>(ref_price) * quantity;
+                    auto check = db_.reserve_cash(user_id, required_cash_cents);
                     if (!check.ok)
                     {
                         send(json{{"type", "error"}, {"message", check.error}}.dump());
@@ -606,8 +606,8 @@ private:
                 }
                 else if (side)
                 {
-                    double required_cash = (static_cast<double>(price) / 100.0) * quantity;
-                    auto check = db_.reserve_cash(user_id, required_cash);
+                    int64_t required_cash_cents = static_cast<int64_t>(price) * quantity;
+                    auto check = db_.reserve_cash(user_id, required_cash_cents);
                     if (!check.ok)
                     {
                         send(json{{"type", "error"}, {"message", check.error}}.dump());
@@ -961,8 +961,8 @@ private:
                         }
                         else if (task.type == DB_REFUND_CASH)
                         {
-                            double amount = (static_cast<double>(task.price) / 100.0) * task.quantity;
-                            db_.release_cash_unlocked(task.buyer_id, amount);
+                            int64_t amount_cents = static_cast<int64_t>(task.price) * task.quantity;
+                            db_.release_cash_unlocked(task.buyer_id, amount_cents);
                             affected_users.insert(task.buyer_id);
                         }
                         else if (task.type == DB_REFUND_SHARES)

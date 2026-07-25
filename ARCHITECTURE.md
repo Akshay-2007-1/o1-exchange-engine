@@ -386,8 +386,6 @@ The frontend has a single smoke test (`App.test.js`) confirming the dashboard re
 
 **No rate limiting.** Login attempts and order submission are both unbounded. Not a concern for the matching engine's own design goals, but worth knowing given the engine sits on a public IP.
 
-**Wallet cash is `double`, not integer cents.** The matching engine was deliberately built around integer-cent prices specifically to remove floating-point ambiguity from the hot path; that discipline doesn't currently extend to `balances.cash` in the database, which is still a `REAL`/`double`. Not causing visible problems today, but it's the one place still exposed to the class of rounding drift the engine itself was redesigned to avoid.
-
 **Adding a company requires a recompile.** `MarketState`'s instrument list is fixed at construction from a hard-coded vector in `main.cpp`. A production system would load the company catalog from config or a database table instead.
 
 **No persistent volume in the documented deploy flow.** The Azure redeploy sequence stops and removes the old container before starting a new one, with no `-v` volume mount for the SQLite file - so the database does not currently survive a redeploy on its own. Mounting a named volume (and pointing `Database`'s constructor at a path inside it) would fix this without any other change.

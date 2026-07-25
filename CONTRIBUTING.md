@@ -62,7 +62,7 @@ Three layers communicate one-way: React frontend → WebSocket server → matchi
 
 ## Key Design Details
 
-**Price units:** Internal matching uses **cents** (integers). Dollar ↔ cent conversion happens in the server/database layer (`price / 100.0`).
+**Price units:** Cents (integers) end to end - matching engine, `balances.cash` in SQLite, and the WebSocket wire protocol (`price`, `cash`, etc.) are all integer cents. The only dollar conversion happens at the frontend render boundary (`formatPrice`, and the `/ 100` in `App.js`'s `user_update`/`leaderboard` handlers).
 
 **Dual engine:** `IOrderBook` interface allows runtime switching between `OrderBook` (O(1) bitmap) and `OrderBookLegacy` (`std::map`). A `{"type":"switch_engine","mode":"CURRENT"|"LEGACY"}` message enqueues a `SWITCH_ENGINE` task; the engine thread applies it via `MarketState::set_engine_mode()` (safe without extra locking - the SPSC queue preserves order, so every previously-queued order/cancel has already landed on the old engine), then rebroadcasts every instrument's book plus an `engine_mode` notice.
 
