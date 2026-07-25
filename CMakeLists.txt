@@ -2,12 +2,34 @@ cmake_minimum_required(VERSION 3.15)
 project(ExchangeEngine)
 
 # ── Homebrew Paths (For libsodium and other local packages) ──
-include_directories(/opt/homebrew/include /usr/local/include)
-link_directories(/opt/homebrew/lib /usr/local/lib)
+if(APPLE)
+    include_directories(/opt/homebrew/include /usr/local/include)
+    link_directories(/opt/homebrew/lib /usr/local/lib)
+endif()
 # ─────────────────────────────────────────────────────────────
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
+
+# Default to an optimized build if the caller didn't ask for something else -
+# a plain `cmake ..` would otherwise compile at -O0, which badly misrepresents
+# the CURRENT-vs-LEGACY benchmark story this project is built around.
+if(NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif()
+
+add_compile_options(-Wall -Wextra)
+
+# -O3 (CMake's own Release default for GCC/Clang) plus -march=native: this
+# project always builds and runs on the same machine (local dev, the Docker
+# image built on the Azure VM itself, and CI's own runner), so targeting the
+# exact CPU is safe and lets __builtin_clzll/ctzll in the bitmap scan lower to
+# native lzcnt/tzcnt instead of the portable fallback. Drop -march=native if
+# that build-on-target assumption ever changes (e.g. shipping a prebuilt
+# binary to a different machine than it was compiled on).
+if(CMAKE_BUILD_TYPE STREQUAL "Release")
+    add_compile_options(-O3 -march=native)
+endif()
 
 option(FETCH_GTEST "Fetch GoogleTest from GitHub" ON)
 option(FETCH_JSON "Fetch nlohmann/json from GitHub" ON)
