@@ -99,9 +99,11 @@ add_executable(tests
     tests/test_orderbook.cpp
     tests/test_orderbook_legacy_parity.cpp
     tests/test_database.cpp
+    tests/test_market_maker_judge.cpp
+    tests/test_game_manager.cpp
 )
 target_include_directories(tests PRIVATE include)
-target_link_libraries(tests GTest::gtest_main sqlite3 sodium)
+target_link_libraries(tests GTest::gtest_main nlohmann_json::nlohmann_json sqlite3 sodium)
 
 enable_testing()
 add_test(NAME EngineTests COMMAND tests)

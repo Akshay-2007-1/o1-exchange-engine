@@ -936,3 +936,171 @@ option {
   border: 1px dashed var(--line);
   border-radius: 6px;
 }
+
+/* Market Making Practice panel */
+.game-panel {
+  margin-top: 16px;
+}
+
+.game-body {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+}
+
+.game-start-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.game-start-row label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  flex: 1;
+  min-width: 180px;
+}
+
+.game-start-row input {
+  background: #101317;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 8px 10px;
+  font-size: 14px;
+}
+
+.game-scenario {
+  display: grid;
+  gap: 6px;
+}
+
+.game-prompt {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.game-scenario-meta {
+  display: flex;
+  gap: 16px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.game-hints {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 13px;
+  display: grid;
+  gap: 4px;
+}
+
+.game-last-result {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.game-verdict-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  background: var(--panel-soft);
+  color: var(--text);
+}
+
+.game-verdict-badge.buy {
+  background: var(--buy-soft);
+  color: var(--buy);
+}
+
+.game-verdict-badge.sell {
+  background: var(--sell-soft);
+  color: var(--sell);
+}
+
+.game-quote-form {
+  display: flex;
+  gap: 12px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+
+.game-quote-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.game-quote-form input {
+  background: #101317;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 8px 10px;
+  font-size: 14px;
+  width: 140px;
+}
+
+.game-quote-form button {
+  min-height: 42px;
+  padding: 0 18px;
+}
+
+.game-reveal {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
+}
+
+.game-reveal-headline {
+  margin: 0;
+  font-size: 14px;
+}
+
+.game-history {
+  display: grid;
+  gap: 2px;
+  border-top: 1px solid var(--line-soft);
+  padding-top: 8px;
+}
+
+.game-history-header,
+.game-history-row {
+  display: grid;
+  grid-template-columns: 32px 1fr 1fr 70px 1fr;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+  padding: 6px 4px;
+}
+
+.game-history-header {
+  color: var(--muted);
+  text-transform: uppercase;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.game-history-row {
+  border-top: 1px solid rgba(43, 49, 58, 0.4);
+}
