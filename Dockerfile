@@ -7,6 +7,8 @@ RUN apt-get update && apt-get install -y \
     cmake \
     libboost-all-dev \
     libgtest-dev \
+    libsqlite3-dev \
+    libsodium-dev \
     nlohmann-json3-dev \
     && rm -rf /var/lib/apt/lists/*
 
@@ -19,5 +21,10 @@ RUN cmake -S . -B build \
     && cmake --build build
 
 EXPOSE 9001
+
+# The engine opens its SQLite file at data/exchange.db (relative to WORKDIR).
+# Mounting a volume here, not at /app itself, persists the database across
+# container recreations without shadowing the compiled binary.
+VOLUME ["/app/data"]
 
 CMD ["./build/engine"]

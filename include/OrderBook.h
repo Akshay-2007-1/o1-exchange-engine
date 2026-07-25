@@ -16,7 +16,7 @@ struct OrderNode
     Order order;         // 40 bytes
     uint32_t prev_idx;   // 4 bytes
     uint32_t next_idx;   // 4 bytes
-    uint8_t padding[16]; // 16 bytes padding -> Total 64 bytes
+    uint8_t padding[16] = {}; // 16 bytes padding -> Total 64 bytes
 };
 #pragma pack(pop)
 
@@ -167,7 +167,7 @@ public:
                 {
                     uint32_t l1_bit = 63 - __builtin_clzll(l1_copy);
                     uint32_t price = (l1_idx * 64) + l1_bit;
-                    depth.push_back({price, bids_[price].total_quantity, bids_[price].order_count});
+                    depth.push_back({price, bids_[price].total_quantity, bids_[price].order_count, {0}});
                     l1_copy &= ~(1ULL << l1_bit);
                 }
                 l2_copy &= ~(1ULL << l2_bit);
@@ -197,7 +197,7 @@ public:
                 {
                     uint32_t l1_bit = __builtin_ctzll(l1_copy);
                     uint32_t price = (l1_idx * 64) + l1_bit;
-                    depth.push_back({price, asks_[price].total_quantity, asks_[price].order_count});
+                    depth.push_back({price, asks_[price].total_quantity, asks_[price].order_count, {0}});
                     l1_copy &= ~(1ULL << l1_bit);
                 }
                 l2_copy &= ~(1ULL << l2_bit);

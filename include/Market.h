@@ -57,12 +57,12 @@ public:
     }
 
     InstrumentState* find_instrument(uint16_t company_id) {
-        if (company_id < 0 || company_id >= instruments_.size()) return nullptr;
+        if (company_id >= instruments_.size()) return nullptr;
         return instruments_[company_id].get();
     }
 
     const InstrumentState* find_instrument(uint16_t company_id) const {
-        if (company_id < 0 || company_id >= instruments_.size()) return nullptr;
+        if (company_id >= instruments_.size()) return nullptr;
         return instruments_[company_id].get();
     }
 
