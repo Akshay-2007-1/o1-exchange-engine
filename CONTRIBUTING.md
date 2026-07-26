@@ -88,9 +88,21 @@ Three layers communicate one-way: React frontend → WebSocket server → matchi
 
 Match the existing `type(scope): summary` convention used throughout the history (e.g. `fix(server): ...`, `feat(frontend): ...`, `docs: ...`). Keep the subject line focused on the change itself.
 
+## Live Demo Deployment
+
+A hosted instance is running for demo/grading purposes:
+
+- Frontend: https://o1-exchange-engine.vercel.app
+- Backend: `wss://o1exchange.duckdns.org`, on a free-tier Oracle Cloud VM
+
+This VM is a free-tier Always Free shape with limited RAM, shared with another unrelated
+process, so please keep the Stress Test panel's order bursts modest rather than firing very
+large order counts - a sustained heavy burst risks exhausting memory on the box. Normal usage
+(placing orders, watching fills, trying the Market Making Practice mode) is fine.
+
 ## Running It Locally
 
-No hosted deployment is required to try the project - clone the repo and run both halves locally:
+You can also clone the repo and run both halves locally instead of using the hosted deployment:
 
 ```bash
 # Terminal 1: backend
