@@ -7,6 +7,7 @@ RUN apt-get update && apt-get install -y \
     cmake \
     git \
     libboost-all-dev \
+    libbenchmark-dev \
     libgtest-dev \
     libsqlite3-dev \
     libsodium-dev \
@@ -19,6 +20,7 @@ COPY . .
 RUN cmake -S . -B build \
     -DFETCH_GTEST=OFF \
     -DFETCH_JSON=OFF \
+    -DFETCH_BENCHMARK=OFF \
     && cmake --build build
 
 EXPOSE 9001
