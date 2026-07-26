@@ -1,6 +1,7 @@
-# CONTRIBUTING.md
+# Contributing to O(1) Exchange
 
-This document explains how to build, run, and understand the codebase - read it before making changes.
+This guide covers how to build, run, and test the project, plus a map of the codebase for anyone
+picking it up for the first time.
 
 ## Build & Run
 
@@ -83,17 +84,25 @@ Three layers communicate one-way: React frontend → WebSocket server → matchi
 
 - `ARCHITECTURE.md` - Full narrative walkthrough of the matching engine, the dual-engine (CURRENT/LEGACY) comparison, the WebSocket protocol, the concurrency model, and a traced order lifecycle. Complements the condensed reference above.
 
-## Commit Messages
+## Commit Message Style
 
-Match the existing `type(scope): summary` convention used throughout the history. Keep the subject line focused on the change itself.
+Match the existing `type(scope): summary` convention used throughout the history (e.g. `fix(server): ...`, `feat(frontend): ...`, `docs: ...`). Keep the subject line focused on the change itself.
 
-## Deployment
+## Running It Locally
 
-Azure VM (`ws://20.205.25.160:9001`). Re-deploy:
+No hosted deployment is required to try the project - clone the repo and run both halves locally:
+
 ```bash
-git pull origin main
-sudo docker build -t exchange-engine .
-sudo docker stop $(sudo docker ps -q) && sudo docker rm $(sudo docker ps -aq)
-sudo docker run -d --restart=always -p 9001:9001 -v exchange-data:/app/data exchange-engine
+# Terminal 1: backend
+docker build -t exchange-engine .
+docker run -d -p 9001:9001 -v exchange-data:/app/data exchange-engine
+
+# Terminal 2: frontend
+cd frontend
+npm install
+npm start
 ```
-The named volume (`exchange-data`, mounted at `/app/data`, where the engine opens `exchange.db`) is what makes the database survive this stop/rm/run cycle - a plain `docker run` without `-v exchange-data:/app/data` starts from an empty database.
+
+The frontend defaults to `ws://127.0.0.1:9001`, matching the backend's default port, so no
+configuration is needed for a local run. Building the backend directly with CMake (see Build & Run
+above) instead of Docker also works, provided Boost, SQLite3, and libsodium are installed locally.

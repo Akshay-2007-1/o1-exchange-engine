@@ -3,8 +3,7 @@ import "./App.css";
 import StressTest from "./StressTest";
 import MarketMakingGame from "./MarketMakingGame";
 
-// const WS_URL = process.env.REACT_APP_WS_URL || "ws://20.205.25.160:9001";
-const WS_URL = "ws://127.0.0.1:9001";
+const WS_URL = process.env.REACT_APP_WS_URL || "ws://127.0.0.1:9001";
 
 const currency = new Intl.NumberFormat("en-US", {
   minimumFractionDigits: 2,
