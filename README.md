@@ -293,7 +293,7 @@ docker run -d -p 9001:9001 -v exchange-data:/app/data exchange-engine
 
 ## Testing
 
-22 Google Test cases across 3 files, all built into one `tests` binary (`ctest` target `EngineTests`):
+47 Google Test cases across 5 files (the tables below detail the core OrderBook, parity and Database suites), all built into one `tests` binary (`ctest` target `EngineTests`):
 
 **`tests/test_orderbook.cpp`** - `OrderBook` unit tests:
 
